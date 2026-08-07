@@ -110,9 +110,10 @@ outbox (JSONL 持久化 at-least-once) → 飞书 REST (回复/卡片/媒体/表
 
 1. /login OAuth 通道（浏览器）仍降级提示——API key 通道已覆盖主要场景
 2. /settings /export /fork /clone /tree 深度适配（依赖 pi 交互选择器，P2）
-3. 群 open 策略依赖 `im:message.group_msg` 敏感权限（setup 已自动申请，需审核发布）
-4. 命令输出中的 UI 消息（选择器/对话框）事件提取（P1，当前 turn_end finalText 已覆盖 assistant 输出）
-5. 定时任务 my-pi-scheduler 为可选依赖（动态检测）
+3. 命令输出中的 UI 消息（选择器/对话框）事件提取（P1，当前 turn_end finalText 已覆盖 assistant 输出）
+4. 定时任务 my-pi-scheduler 为可选依赖（动态检测）
+
+> 已解决：群 open（免 @）策略依赖的 `im:message.group_msg` 权限由 setup 扫码时**自动申请即生效**，无需审核、无需手动配置。
 
 ---
 
