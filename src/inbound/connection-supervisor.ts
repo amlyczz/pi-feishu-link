@@ -178,7 +178,7 @@ export class ConnectionSupervisor {
 			if (verdict && !verdict.allowed) {
 				this.setState(
 					"degraded",
-					`配额熔断，${Math.ceil(verdict.retryAfterMs / 60_000)} 分钟后重试`,  
+					`配额熔断，${Math.ceil(verdict.retryAfterMs / 60_000)} 分钟后重试`,
 				);
 				this.onQuotaBlocked?.(verdict.retryAfterMs);
 				return;
@@ -189,7 +189,7 @@ export class ConnectionSupervisor {
 			);
 			this.setState(
 				"degraded",
-				`connect failed (attempt ${this.connectAttempts})`,  
+				`connect failed (attempt ${this.connectAttempts})`,
 			);
 			if (
 				this.downReportEnabled &&

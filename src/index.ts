@@ -929,7 +929,9 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					"degraded",
 					`连接配额熔断：${mins} 分钟后再试（持续重试会锁死配额）`,
 				);
-				void notifyOwner(`⚠️ 连接配额熔断：租户连接数超限，${mins} 分钟后自动重试。期间请勿反复 /feishu restart。`);
+				void notifyOwner(
+					`⚠️ 连接配额熔断：租户连接数超限，${mins} 分钟后自动重试。期间请勿反复 /feishu restart。`,
+				);
 			},
 			onStateChange: (state) => statusStore.setConnState(state),
 			onRecovered: async (downMs) => {
@@ -1506,7 +1508,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 						if (!verdict.allowed) {
 							const mins = Math.ceil(verdict.retryAfterMs / 60_000);
 							notify(
-								`🚫 连接配额熔断中：租户连接数超限，约 ${mins} 分钟后自动解除。期间请勿反复 start/restart（每次尝试都会重置冷却）。`,  
+								`🚫 连接配额熔断中：租户连接数超限，约 ${mins} 分钟后自动解除。期间请勿反复 start/restart（每次尝试都会重置冷却）。`,
 							);
 							return;
 						}
