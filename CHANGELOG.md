@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.4 (2026-08-07)
+
+### 卸载自动停 daemon（用户报告：卸载后旧 daemon 仍占连接）
+
+- **背景**：pi 无卸载钩子（ExtensionAPI 无 package_removed 事件），`pi remove` 不会执行任何扩展清理代码；detached daemon 因此会活过卸载，继续持有网关锁和飞书连接（重装后误报"连接由其他进程持有"）
+- **修复**：daemon 启动后**自监控注册状态**（`startUninstallWatch`）——
+  - 扩展入口文件被删（npm/git 卸载删文件）→ 退出
+  - settings.json（用户级 `~/.pi/agent/settings.json` + 项目级 `.pi/settings.json`）中已无本扩展 → 退出
+  - 退出前释放网关锁（`stopBridge`），下次安装/启动即干净状态
+  - 无任何设置文件时保守存活（兼容 `pi -e` 直跑）
+- 纯函数 `extensionStillRegistered` / `checkUninstallCondition` 可单测
+
+**测试**：207 → **210 项全绿**（卸载自监控 3 项）。
+
 ## 0.1.3 (2026-08-07)
 
 ### 修复：`/feishu start` 误报"启动超时/被占用"（用户报告）

@@ -4,8 +4,9 @@
 // read-only via the gateway file lock.
 
 import { spawn } from "node:child_process";
-import { openSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, openSync, readFileSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
 import { readGatewayOwner, type GatewayOwner } from "./gateway-lock.js";
 
 export const DAEMON_ENV = "PI_FEISHU_LINK_DAEMON";
@@ -127,6 +128,121 @@ function isPidAlive(pid: number): boolean {
 	} catch (err) {
 		return (err as NodeJS.ErrnoException).code === "EPERM";
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Uninstall self-monitor (2026-08-07): pi has no uninstall hook, so `pi remove`
+// never runs extension code — a detached daemon would survive uninstall and
+// keep holding the gateway lock + Feishu connection (user reported confusion).
+// The daemon therefore watches its own registration and exits when uninstalled.
+// ---------------------------------------------------------------------------
+
+/** pi settings files that list installed extension sources. */
+export function defaultSettingsFiles(): string[] {
+	return [
+		join(homedir(), ".pi", "agent", "settings.json"),
+		join(process.cwd(), ".pi", "settings.json"),
+	];
+}
+
+/**
+ * Resolve a pi package source string to a directory that contains the
+ * extension. Returns undefined when the source can't be resolved locally
+ * (git:/https:/ssh: URLs are installed into pi-managed caches we don't model).
+ */
+function resolveSourceDir(source: string, settingsDir: string): string | undefined {
+	if (source.startsWith("npm:")) {
+		return join(homedir(), ".pi", "agent", "npm", "node_modules", source.slice(4));
+	}
+	if (source.startsWith("git:") || source.startsWith("https:") || source.startsWith("ssh:")) {
+		return undefined;
+	}
+	// Local paths (./ ../ / ~ and bare relative paths) resolve against the
+	// settings file's own directory.
+	return resolve(settingsDir, source);
+}
+
+/**
+ * True when at least one existing settings file still lists a package source
+ * whose resolved directory contains `entryPath`. Missing settings files are
+ * ignored; if NO settings files exist we stay alive (conservative — the
+ * extension may be run directly via `pi -e` without ever being installed).
+ */
+export function extensionStillRegistered(
+	entryPath: string,
+	settingsFiles: string[],
+): boolean {
+	const present = settingsFiles.filter((f) => existsSync(f));
+	if (present.length === 0) return true;
+	for (const file of present) {
+		try {
+			const raw = JSON.parse(
+				readFileSync(file, "utf8"),
+			) as { packages?: unknown };
+			const pkgs: string[] = Array.isArray(raw?.packages)
+				? raw.packages.filter((p): p is string => typeof p === "string")
+				: [];
+			for (const p of pkgs) {
+				const base = resolveSourceDir(p, dirname(file));
+				if (
+					base &&
+					(entryPath === base || entryPath.startsWith(base + sep))
+				) {
+					return true;
+				}
+			}
+		} catch {
+			/* malformed settings — skip */
+		}
+	}
+	return false;
+}
+
+/**
+ * True when the daemon should keep running: the entry file still exists AND
+ * (no settings present OR the extension is still registered).
+ */
+export function checkUninstallCondition(
+	entryPath: string,
+	settingsFiles: string[],
+): boolean {
+	if (!existsSync(entryPath)) return false; // files deleted (npm/git uninstall)
+	return extensionStillRegistered(entryPath, settingsFiles);
+}
+
+export interface UninstallWatchOptions {
+	/** Extension entry file (src/index.ts) the daemon runs with. */
+	entryPath: string;
+	settingsFiles?: string[];
+	intervalMs?: number;
+	onExit?: () => void | Promise<void>;
+}
+
+/**
+ * Periodically check whether the extension is still installed; when not,
+ * call onExit (e.g. release the gateway lock) and terminate the process.
+ * Returns a stop() handle for tests / teardown.
+ */
+export function startUninstallWatch(opts: UninstallWatchOptions): () => void {
+	const settingsFiles = opts.settingsFiles ?? defaultSettingsFiles();
+	const intervalMs = opts.intervalMs ?? 15_000;
+	const timer = setInterval(() => {
+		if (checkUninstallCondition(opts.entryPath, settingsFiles)) return;
+		try {
+			void (async () => {
+				try {
+					await opts.onExit?.();
+				} catch {
+					/* ignore */
+				}
+				process.exit(0);
+			})();
+		} catch {
+			/* ignore */
+		}
+	}, intervalMs);
+	timer.unref?.();
+	return () => clearInterval(timer);
 }
 
 /**

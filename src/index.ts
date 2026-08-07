@@ -37,7 +37,12 @@ import { EventForwarder } from "./outbound/event-forwarder.js";
 import { PermissionBridge } from "./sessions/permission-bridge.js";
 import { createToolCallHandler } from "./sessions/tool-call-gate.js";
 import { TurnSupervisor } from "./sessions/turn-supervisor.js";
-import { spawnDaemon, stopDaemon, DAEMON_ENV } from "./host/daemon-host.js";
+import {
+	spawnDaemon,
+	stopDaemon,
+	startUninstallWatch,
+	DAEMON_ENV,
+} from "./host/daemon-host.js";
 import { ConversationManager } from "./sessions/conversation-manager.js";
 import { PiSessionBackend } from "./sessions/pi-session-backend.js";
 import { BridgeRuntime } from "./sessions/bridge-runtime.js";
@@ -118,6 +123,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	let eventForwarder: EventForwarder | undefined;
 	let compensation: MissedMessageCompensation | undefined;
 	let gatewayLock: GatewayLockHandle | undefined;
+	let stopUninstallWatch: (() => void) | undefined;
 	let botOpenId: string | undefined;
 	let started = false;
 
@@ -1185,6 +1191,15 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			try {
 				await startBridge();
 				logger.info("feishu.daemon.ready");
+				// 卸载自监控（2026-08-07）：pi 无卸载钩子，detached daemon 不会随
+				// `pi remove` 停止；daemon 自行监控注册状态，被卸载即释放锁退出。
+				stopUninstallWatch = startUninstallWatch({
+					entryPath: extensionEntryPath(),
+					onExit: async () => {
+						logger.info("feishu.daemon.uninstalled");
+						await stopBridge().catch(() => undefined);
+					},
+				});
 			} catch (err) {
 				logger.error("feishu.daemon.start_failed", {
 					error: err instanceof Error ? err.message : String(err),
