@@ -146,3 +146,9 @@
 - 出站媒体走 SDK `im.v1.image/file.create`，实机参数细节（FormData 形状）需沙箱验证
 - 语音入站明确不支持（飞书无官方 ASR）
 - 断连窗口内入站消息无法补偿（恢复通知提示"可能漏收"）
+
+## 0.1.7 (2026-08-07)
+
+- **移除机器人菜单功能**（用户决定放弃；`application.bot.menu_v6` 订阅/命令管线已 revert，测试回到 217）
+- **恢复 .spec 1835/1905 文档**（revert 误删后从原提交恢复，菜单章节标记为放弃）
+- **前置依赖安装**：README 快速开始新增 `pi install npm:@ineersa/my-pi-scheduler`（定时任务前置依赖）
