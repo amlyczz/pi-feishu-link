@@ -18,6 +18,8 @@ export interface SupervisorTransport {
 	isConnected(): boolean;
 }
 
+import type { QuotaGovernor } from "../common/quota-governor.js";
+
 export interface ConnectionSupervisorOptions {
 	transport: SupervisorTransport;
 	tickIntervalMs?: number;
@@ -28,6 +30,10 @@ export interface ConnectionSupervisorOptions {
 	reconnectBackoffBaseMs?: number;
 	reconnectBackoffMaxMs?: number;
 	downReportEnabled?: boolean;
+	/** QuotaGovernor 熔断（1905 spec 创新点②）：连接失败计入预算，超额停手不再烧配额。 */
+	governor?: QuotaGovernor;
+	/** 熔断触发回调（retryAfterMs = 剩余等待）。 */
+	onQuotaBlocked?: (retryAfterMs: number) => void;
 	onStateChange?: (state: ConnState, detail?: string) => void;
 	onRecovered?: (downMs: number) => void;
 	onDownReport?: (downMs: number) => void;
@@ -67,6 +73,8 @@ export class ConnectionSupervisor {
 	private probeFailCount = 0;
 	private connectAttempts = 0;
 	private downSince: number | undefined;
+	private readonly governor: QuotaGovernor | undefined;
+	private readonly onQuotaBlocked: ((retryAfterMs: number) => void) | undefined;
 	private downReported = false;
 	private timer: NodeJS.Timeout | undefined;
 	private stopped = true;
@@ -83,6 +91,8 @@ export class ConnectionSupervisor {
 			options.reconnectBackoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS;
 		this.backoffMaxMs = options.reconnectBackoffMaxMs ?? DEFAULT_BACKOFF_MAX_MS;
 		this.downReportEnabled = options.downReportEnabled ?? true;
+		this.governor = options.governor;
+		this.onQuotaBlocked = options.onQuotaBlocked;
 		this.onStateChange = options.onStateChange;
 		this.onRecovered = options.onRecovered;
 		this.onDownReport = options.onDownReport;
@@ -154,18 +164,32 @@ export class ConnectionSupervisor {
 			}
 			this.connectAttempts = 0;
 			this.downReported = false;
+			// 连接成功 = 配额恢复：清除熔断窗口。
+			this.governor?.record(true);
 			this.setState("connected");
 			// Consider recovered when connected AND we had been down.
 			this.maybeRecover();
 		} catch {
 			this.connectAttempts += 1;
+			this.governor?.record(false);
+			// QuotaGovernor 熔断（1905 spec 创新点②）：窗口内失败超额 → 停手，
+			// 不再每 60s 重试顶住配额冷却窗口。剩余等待由 onQuotaBlocked 上报。
+			const verdict = this.governor?.canConnect();
+			if (verdict && !verdict.allowed) {
+				this.setState(
+					"degraded",
+					`配额熔断，${Math.ceil(verdict.retryAfterMs / 60_000)} 分钟后重试`,  
+				);
+				this.onQuotaBlocked?.(verdict.retryAfterMs);
+				return;
+			}
 			const delayMs = Math.min(
 				this.backoffBaseMs * 2 ** (this.connectAttempts - 1),
 				this.backoffMaxMs,
 			);
 			this.setState(
 				"degraded",
-				`connect failed (attempt ${this.connectAttempts})`,
+				`connect failed (attempt ${this.connectAttempts})`,  
 			);
 			if (
 				this.downReportEnabled &&

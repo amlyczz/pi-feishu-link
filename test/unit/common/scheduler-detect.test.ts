@@ -14,7 +14,10 @@ function makePiRoot(): string {
 }
 
 function withPackages(root: string, pkgs: unknown[]) {
-	writeFileSync(join(root, "settings.json"), JSON.stringify({ packages: pkgs }));
+	writeFileSync(
+		join(root, "settings.json"),
+		JSON.stringify({ packages: pkgs }),
+	);
 }
 
 function withNodeModules(root: string) {
@@ -26,7 +29,10 @@ function withNodeModules(root: string) {
 		"my-pi-scheduler",
 	);
 	mkdirSync(pkgDir, { recursive: true });
-	writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "@ineersa/my-pi-scheduler" }));
+	writeFileSync(
+		join(pkgDir, "package.json"),
+		JSON.stringify({ name: "@ineersa/my-pi-scheduler" }),
+	);
 }
 
 test("detectSchedulerInstalled: settings.json string 形式 → true", () => {

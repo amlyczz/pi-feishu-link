@@ -30,7 +30,7 @@ export function detectSchedulerInstalled(piAgentDir?: string): boolean {
 					(typeof p === "object" &&
 						p !== null &&
 						typeof (p as { source?: unknown }).source === "string" &&
-						((p as { source: string }).source.includes(SCHEDULER_PACKAGE))),
+						(p as { source: string }).source.includes(SCHEDULER_PACKAGE)),
 			)
 		) {
 			return true;

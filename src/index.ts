@@ -31,6 +31,7 @@ import { connectionStatusText } from "./common/connection-status.js";
 import { pickRandomReaction } from "./common/reactions.js";
 import { StatusStore } from "./common/status.js";
 import { detectSchedulerInstalled } from "./common/scheduler-detect.js";
+import { QuotaGovernor } from "./common/quota-governor.js";
 import { DedupeStore } from "./common/dedupe-store.js";
 import { OutboundRouter } from "./outbound/outbound-router.js";
 import { Outbox, FatalDeliveryError } from "./outbound/outbox.js";
@@ -120,6 +121,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 
 	let transport: FeishuTransport | undefined;
 	let supervisor: ConnectionSupervisor | undefined;
+	const quotaGovernor = new QuotaGovernor({ dir: rootDir() });
 	let outbox: Outbox | undefined;
 	let liveChannel: LiveChannel | undefined;
 	let conversations: ConversationManager | undefined;
@@ -918,6 +920,17 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			silenceSuspectMs: cfg.connection.silenceSuspectMs,
 			reconnectBackoffMaxMs: cfg.connection.reconnectBackoffMaxMs,
 			downReportEnabled: cfg.connection.downReportEnabled,
+			// QuotaGovernor 熔断（1905 spec 创新点②）：连接失败计入历史，
+			// 60min 窗口超额即停手，不再 60s 重试顶住租户配额。
+			governor: quotaGovernor,
+			onQuotaBlocked: (retryAfterMs) => {
+				const mins = Math.ceil(retryAfterMs / 60_000);
+				statusStore.setConnState(
+					"degraded",
+					`连接配额熔断：${mins} 分钟后再试（持续重试会锁死配额）`,
+				);
+				void notifyOwner(`⚠️ 连接配额熔断：租户连接数超限，${mins} 分钟后自动重试。期间请勿反复 /feishu restart。`);
+			},
 			onStateChange: (state) => statusStore.setConnState(state),
 			onRecovered: async (downMs) => {
 				statusStore.recordReconnect(downMs);
@@ -946,7 +959,8 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			residentSessions: 0,
 			maxResident: cfg.sessions.maxResident,
 			schedulerDetected:
-				detectSchedulerInstalled() || Boolean(loadOverrides()?.schedulerEnabled),
+				detectSchedulerInstalled() ||
+				Boolean(loadOverrides()?.schedulerEnabled),
 		});
 		// periodic eviction + status refresh + stream-card TTL sweep (M4/M5)
 		setInterval(() => {
@@ -1485,6 +1499,18 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					return;
 				}
 				case "start":
+					// QuotaGovernor 熔断前置检查（1905 spec 创新点②）：配额封锁期阻止启动，
+					// 避免刚 start 又被拒，把冷却窗口继续顶住。
+					{
+						const verdict = quotaGovernor.canConnect();
+						if (!verdict.allowed) {
+							const mins = Math.ceil(verdict.retryAfterMs / 60_000);
+							notify(
+								`🚫 连接配额熔断中：租户连接数超限，约 ${mins} 分钟后自动解除。期间请勿反复 start/restart（每次尝试都会重置冷却）。`,  
+							);
+							return;
+						}
+					}
 					// TUI-side: manage the daemon lifecycle (FR-15).
 					try {
 						const owner = readGatewayOwner(rootDir());

@@ -153,3 +153,4 @@
 - **恢复 .spec 1835/1905 文档**（revert 误删后从原提交恢复，菜单章节标记为放弃）
 - **前置依赖安装**：README 快速开始新增 `pi install npm:@ineersa/my-pi-scheduler`（定时任务前置依赖）
 - **定时任务改为可选依赖**：新增 `detectSchedulerInstalled()`（settings.json packages / node_modules 双通道探测，含 object form）；未安装时 `/loop /remind /schedule` 回复明确安装指引（不再路由给模型瞎猜）；`schedulerDetected` 状态改为自动检测（overrides 可手动覆盖）
+- **QuotaGovernor 连接配额熔断**（1905 spec 创新点②落地）：连接失败历史落盘 `conn-history.jsonl`（60min 窗口 / 12 次上限），超额即熔断停手——daemon 不再每 60s 重试把租户配额冷却窗口顶住；`/feishu start` 前置检查阻止配额封锁期启动；成功连接自动解除熔断；跨 daemon 生效（历史文件重读）
