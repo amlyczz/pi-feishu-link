@@ -16,9 +16,7 @@ export interface RegisterAppCallbacks {
 	onStatusChange?(info: { status?: string }): void;
 }
 
-export type RegisterAppFn = (
-	callbacks: RegisterAppCallbacks,
-) => Promise<{
+export type RegisterAppFn = (callbacks: RegisterAppCallbacks) => Promise<{
 	client_id?: string;
 	client_secret?: string;
 	user_info?: { tenant_brand?: string };

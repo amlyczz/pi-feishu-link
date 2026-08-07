@@ -1197,7 +1197,10 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			// TUI: attach to an existing daemon-owned gateway, else spawn the daemon.
 			const owner = readGatewayOwner(rootDir());
 			if (owner && owner.pid !== process.pid) {
-				setStatus(`飞书连接由其他进程持有（pid ${owner.pid}）`);
+				// 卸载/重装不会停止旧 daemon（detached 进程）——明确告诉用户原因和动作。
+				setStatus(
+					`检测到旧 daemon（pid ${owner.pid}）仍持有飞书连接（卸载不会自动停止它）。运行 /feishu takeover 接管，或 /feishu stop 清理`,
+				);
 				return;
 			}
 			if (owner && owner.pid === process.pid) {
@@ -1362,7 +1365,9 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 							return lark.registerApp({
 								source: "pi-feishu-link",
 								onQRCodeReady(info: { url: string; expireIn: number }) {
-									stage("📱 请用飞书 App 扫码授权（未收到回调前请勿关闭本窗口）");
+									stage(
+										"📱 请用飞书 App 扫码授权（未收到回调前请勿关闭本窗口）",
+									);
 									qr.generate(info.url, { small: true }, (qrText: string) => {
 										console.log("\n飞书授权二维码 / Feishu authorization QR");
 										console.log(qrText);
@@ -1413,8 +1418,8 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 								result.status === "started"
 									? `飞书桥已启动（daemon pid ${result.pid}）。`
 									: result.owner
-											? `启动被占用（owner ${result.owner.pid}）。运行 /feishu takeover 接管。日志：${rootDir()}/daemon.log`
-											: `启动超时（daemon 未注册）。日志：${rootDir()}/daemon.log`,
+										? `启动被占用（owner ${result.owner.pid}）。运行 /feishu takeover 接管。日志：${rootDir()}/daemon.log`
+										: `启动超时（daemon 未注册）。日志：${rootDir()}/daemon.log`,
 							);
 						}
 					} catch (err) {
