@@ -1341,20 +1341,45 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			switch (sub) {
 				case "setup": {
 					const qr = (await import("qrcode-terminal")).default;
+					// UX（2026-08-07）：阶段进度 + 轮询状态 + 回调到达醒目提示。
+					const stage = (text: string) => {
+						console.log(`\n[feishu-setup] ${text}`);
+					};
+					let pollingShown = false;
 					await runSetup({
 						mode: "auto",
 						groupPolicy: "open",
+						onStage: (s) => {
+							if (s === "creating") stage("🚀 正在创建飞书应用…");
+							if (s === "callback") {
+								stage("✅ 已收到飞书授权回调！正在写入凭据…");
+								notify("📲 飞书授权成功！正在写入凭据…");
+							}
+							if (s === "saved") stage("💾 凭据已保存");
+						},
 						registerApp: async ({ onQRCodeReady }) => {
 							const lark = await import("@larksuiteoapi/node-sdk");
 							return lark.registerApp({
 								source: "pi-feishu-link",
 								onQRCodeReady(info: { url: string; expireIn: number }) {
+									stage("📱 请用飞书 App 扫码授权（未收到回调前请勿关闭本窗口）");
 									qr.generate(info.url, { small: true }, (qrText: string) => {
 										console.log("\n飞书授权二维码 / Feishu authorization QR");
 										console.log(qrText);
 										console.log(info.url);
 									});
 									onQRCodeReady(info.url, info.expireIn);
+								},
+								onStatusChange(info: { status?: string; interval?: number }) {
+									// 轮询中：仅首次提示，避免刷屏。
+									if (info?.status === "polling" && !pollingShown) {
+										pollingShown = true;
+										stage("⏳ 等待扫码授权…（自动检测，无需操作）");
+									} else if (info?.status === "slow_down") {
+										stage(`⚠ 轮询被限速，${info.interval ?? "?"}s 后重试`);
+									} else if (info?.status === "domain_switched") {
+										stage("🌐 已切换到 Lark 国际版");
+									}
 								},
 							}) as Promise<{
 								client_id?: string;
@@ -1364,7 +1389,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 						},
 					});
 					notify(
-						"飞书配置已保存。运行 /feishu start 启动。打开飞书搜索你的机器人发任意消息。",
+						"✅ 飞书配置已保存！运行 /feishu start 启动，然后打开飞书搜索你的机器人发任意消息。",
 					);
 					return;
 				}
@@ -1387,7 +1412,9 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 							notify(
 								result.status === "started"
 									? `飞书桥已启动（daemon pid ${result.pid}）。`
-									: `启动超时/被占用（owner ${result.owner?.pid ?? "?"}）。查看日志：${rootDir()}/daemon.log`,
+									: result.owner
+											? `启动被占用（owner ${result.owner.pid}）。运行 /feishu takeover 接管。日志：${rootDir()}/daemon.log`
+											: `启动超时（daemon 未注册）。日志：${rootDir()}/daemon.log`,
 							);
 						}
 					} catch (err) {

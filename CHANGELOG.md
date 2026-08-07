@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.3 (2026-08-07)
+
+### 修复：`/feishu start` 误报"启动超时/被占用"（用户报告）
+
+- **根因**：daemon 以 `tail -f /dev/null | exec pi …` 启动，pi 进程 pid ≠ bash 包装进程 pid，`spawnDaemon` 的 `registered.pid === child.pid` 判断**永远为 false** → daemon 明明连接成功（daemon.log `ws client ready`）却总是返回 busy
+- **修复**：等待循环改为「检测到**新的存活 owner** 即视为启动成功」（记录 spawn 前的 owner，排除旧 owner 未让位的情况）；返回的 pid 改为真实 daemon pid
+- `/feishu start` 消息区分：被占用（提示 `/feishu takeover`）vs 超时（提示看日志）
+
+### UX：`/feishu setup` 阶段进度 + 回调提示（用户报告）
+
+- 阶段打印：🚀 创建应用 → 📱 扫码提示 → ⏳ 等待授权（自动检测）→ ✅ **收到回调** → 💾 凭据已保存
+- 回调到达时**同时弹系统通知**（`ctx.ui.notify`）——不再"扫了码不知道发生什么"
+- 轮询被限速（slow_down）、Lark 国际版切换也有提示
+- `runSetup` 新增 `onStage` 回调（creating/callback/saved）供 TUI 展示进度
+
+**测试**：201 → **207 项全绿**（新增 spawnDaemon 真实注册验证 + auth-setup 阶段/错误分支 5 项）。
+
 ## 0.1.2 (2026-08-07)
 
 ### 表情回执策略（用户指令，2026-08-07）

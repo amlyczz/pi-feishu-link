@@ -31,6 +31,8 @@ export interface SetupInput {
 	appSecret?: string;
 	domain?: Domain;
 	groupPolicy: GroupPolicy;
+	/** UX 阶段回调（2026-08-07）：creating → callback → saved，供 TUI 展示进度 */
+	onStage?: (stage: "creating" | "callback" | "saved") => void;
 }
 
 /** Run setup; returns the persisted config. */
@@ -40,6 +42,7 @@ export async function runSetup(input: SetupInput): Promise<FeishuConfig> {
 	let domain: Domain = input.domain ?? "feishu";
 	if (input.mode === "auto") {
 		if (!input.registerApp) throw new Error("registerApp 未提供");
+		input.onStage?.("creating");
 		// The caller's registerApp implementation handles QR/link printing itself
 		// (index.ts prints via qrcode-terminal inside its closure).
 		const result = await input.registerApp({
@@ -53,6 +56,7 @@ export async function runSetup(input: SetupInput): Promise<FeishuConfig> {
 		appId = result.client_id;
 		appSecret = result.client_secret;
 		domain = result.user_info?.tenant_brand === "lark" ? "lark" : "feishu";
+		input.onStage?.("callback");
 	} else {
 		appId = (input.appId ?? "").trim();
 		appSecret = (input.appSecret ?? "").trim();
@@ -66,5 +70,6 @@ export async function runSetup(input: SetupInput): Promise<FeishuConfig> {
 		groupPolicy: input.groupPolicy,
 	};
 	saveConfig(config);
+	input.onStage?.("saved");
 	return config;
 }

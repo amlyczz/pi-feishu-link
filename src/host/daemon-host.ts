@@ -78,6 +78,9 @@ export async function spawnDaemon(opts: DaemonOptions, takeover = false): Promis
   if (owner && owner.pid !== process.pid && !takeover) {
     return { status: "busy", owner };
   }
+  // The owner that existed before WE spawned (normally undefined). Used to
+  // distinguish "our daemon registered" from "a pre-existing owner lingers".
+  const previousOwnerPid = owner?.pid;
   const logFd = openSync(opts.logPath, "a");
   const child = spawn("bash", ["-lc", buildDaemonCommand(opts)], {
     detached: true,
@@ -94,13 +97,22 @@ export async function spawnDaemon(opts: DaemonOptions, takeover = false): Promis
     const candidate = readGatewayOwner(opts.lockDir);
     if (!candidate) continue;
     if (!isPidAlive(candidate.pid)) continue; // stale lock, daemon not registered yet
+    if (previousOwnerPid !== undefined && candidate.pid === previousOwnerPid) {
+      continue; // old owner hasn't yielded yet — keep waiting
+    }
+    // The daemon runs as `tail -f /dev/null | exec pi …`; the pi process pid
+    // therefore NEVER equals the spawned bash wrapper pid (bug 2026-08-07 —
+    // the old `candidate.pid === child.pid` check always reported "busy" even
+    // though the daemon connected fine). Any NEW live owner = success.
     registered = candidate;
-    if (registered.pid === child.pid) break;
-    if (registered.pid !== child.pid) break; // someone else took over
+    break;
   }
+  const started = Boolean(
+    registered && registered.pid !== previousOwnerPid,
+  );
   return {
-    status: registered && registered.pid === child.pid ? "started" : "busy",
-    pid: child.pid,
+    status: started ? "started" : "busy",
+    pid: registered?.pid ?? child.pid,
     owner: registered,
   };
 }

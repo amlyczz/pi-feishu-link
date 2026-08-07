@@ -141,3 +141,55 @@ test("stopDaemon escalates to SIGKILL when the owner ignores SIGTERM", async () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("spawnDaemon reports started when a new live owner registers (daemon pid != wrapper pid)", async () => {
+  const dir = tempDir();
+  try {
+    const { writeFileSync, chmodSync } = await import("node:fs");
+    // A fake "pi" that writes gateway.json with its OWN pid then stays alive.
+    // The real daemon runs via `tail -f /dev/null | exec pi …`, so the pi
+    // process pid never equals the spawned bash wrapper pid — the fixed
+    // spawnDaemon must treat ANY new live owner as success (bug 2026-08-07).
+    const shim = join(dir, "pi");
+    writeFileSync(
+      shim,
+      [
+        "#!/bin/bash",
+        "exec node -e '" +
+          "const fs=require(\"fs\");" +
+          "fs.writeFileSync(process.env.LOCK,JSON.stringify({pid:process.pid,startedAt:Date.now(),status:\"connected\"}));" +
+          "process.on(\"SIGTERM\",()=>process.exit(0));" +
+          "setInterval(()=>{},1000)'",
+      ].join("\n"),
+    );
+    chmodSync(shim, 0o755);
+    const result = await spawnDaemon(
+      {
+        extensionPath: "/irrelevant.ts",
+        lockDir: dir,
+        logPath: join(dir, "daemon.log"),
+        cwd: "/",
+        piBin: shim,
+        env: { LOCK: join(dir, "gateway.json") },
+        waitForOwnerMs: 4000,
+      },
+      false,
+    );
+    assert.equal(result.status, "started", "new live owner must be reported started");
+    assert.ok(result.owner, "owner reported");
+    assert.equal(
+      result.pid,
+      result.owner!.pid,
+      "returned pid is the real daemon pid, not the bash wrapper pid",
+    );
+    let alive = true;
+    try { process.kill(result.owner!.pid, 0); } catch { alive = false; }
+    assert.equal(alive, true, "registered owner is a live process");
+    // Cleanup: kill the fake daemon (node) and the wrapper chain.
+    try { process.kill(result.owner!.pid, "SIGTERM"); } catch { /* ignore */ }
+    try { process.kill(result.pid!, "SIGTERM"); } catch { /* ignore */ }
+    try { process.kill(result.owner!.pid, "SIGKILL"); } catch { /* ignore */ }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
