@@ -306,12 +306,11 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
 		/* already dead */
 	}
 	try {
-		const out = execFileSync(
-			"ps",
-			["-o", "ppid=", "-p", String(pid)],
-			{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000 },
-		)
-			.trim();
+		const out = execFileSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 3000,
+		}).trim();
 		const ppid = Number(out);
 		if (Number.isInteger(ppid) && ppid > 1 && ppid !== process.pid) {
 			try {

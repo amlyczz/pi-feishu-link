@@ -109,6 +109,11 @@ export interface LarkSdkLike {
 		domain?: string;
 		appType?: number; // AppType enum: 0 = SelfBuild, 1 = ISV
 		loggerLevel?: number;
+		// 连接健康（2026-08-07 加固）：autoReconnect:false + onReady/onError
+		// 让 supervisor 感知 WS 真实状态，用受控退避重连而非 SDK 内部无限重试。
+		autoReconnect?: boolean;
+		onReady?: () => void;
+		onError?: (err: unknown) => void;
 	}) => LarkSdkWsClient;
 	EventDispatcher: new (opts: { loggerLevel?: number }) => LarkSdkDispatcher;
 }
@@ -251,6 +256,7 @@ export class FeishuTransport implements SupervisorTransport {
 	private client: LarkSdkClient | undefined;
 	private wsClient: LarkSdkWsClient | undefined;
 	private running = false;
+	private wsReady = false;
 	private botOpenId: string | undefined;
 	private readonly chatModeCache = new Map<string, "p2p" | "group" | "topic">();
 	/** Cached tenant_access_token (SDK's bare client.request() does NOT attach it). */
@@ -332,9 +338,22 @@ export class FeishuTransport implements SupervisorTransport {
 		this.wsClient = new sdk.WSClient({
 			appId: config.appId,
 			appSecret: config.appSecret,
-			// 实机验证（2026-08-07）：WSClient 不需要 appType/domain（REST Client
-			// 才需要 appType 走 token 管理）；这里与 SDK 默认行为一致。真正的坑是
-			// 连接频繁变动会导致飞书事件投递延迟数分钟（连接稳定后恢复秒到）。
+			// 实机验证（2026-08-07）：
+			// 1) WSClient 不需要 appType/domain（REST Client 才需要）；
+			// 2) autoReconnect:false —— SDK 内部无限重试会在连接被拒（如
+			//    exceed_conn_limit 配额封锁）时疯狂打点，把配额锁得更久。
+			//    改为由 supervisor 用受控退避重连（connect() 检查 isConnected）。
+			autoReconnect: false,
+			onReady: () => {
+				this.wsReady = true;
+				this.deps.logger?.debug("feishu.transport.ws_ready");
+			},
+			onError: (err: unknown) => {
+				this.wsReady = false;
+				this.deps.logger?.error("feishu.transport.ws_error", {
+					error: err instanceof Error ? err.message : String(err),
+				});
+			},
 		});
 		this.running = true;
 		try {
@@ -343,6 +362,11 @@ export class FeishuTransport implements SupervisorTransport {
 			this.running = false;
 			throw err;
 		}
+	}
+
+	/** WS 是否已成功握手（supervisor 据此决定是否重试，而不是假装成功）。 */
+	isConnected(): boolean {
+		return this.wsReady;
 	}
 
 	async stop(): Promise<void> {

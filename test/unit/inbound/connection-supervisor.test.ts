@@ -14,6 +14,7 @@ class FakeTransport implements SupervisorTransport {
 	probeCalls = 0;
 	failStart = false;
 	started = false;
+	wsConnected = true;
 
 	async start(): Promise<void> {
 		this.startCalls++;
@@ -27,6 +28,10 @@ class FakeTransport implements SupervisorTransport {
 	async probe(): Promise<{ ok: boolean; latencyMs: number }> {
 		this.probeCalls++;
 		return { ok: this.probeOk, latencyMs: 42 };
+	}
+	/** 模拟 WS 是否握手成功（2026-08-07 加固） */
+	isConnected(): boolean {
+		return this.started && this.wsConnected;
 	}
 }
 
@@ -175,4 +180,24 @@ test("tick is a no-op when stopped", async () => {
 	const startCalls = t.startCalls;
 	await sup.tick();
 	assert.equal(t.startCalls, startCalls);
+});
+
+test("WS 握手未完成（isConnected=false）→ 进入退化并计划重试（2026-08-07 加固）", async () => {
+	const t = new FakeTransport();
+	// 模拟 start() 成功但 WS 握手失败（如连接配额受限）
+	t.wsConnected = false;
+	const sup = makeSupervisor(t, {
+		wsHandshakeTimeoutMs: 40,
+		reconnectBackoffBaseMs: 20,
+		reconnectBackoffMaxMs: 40,
+	});
+	await sup.sup.start();
+	// 握手超时后 connect() 应走 catch → degraded + 计划重试（startCalls 继续增长）
+	const callsAfterStart = t.startCalls;
+	assert.ok(callsAfterStart >= 1, "start 至少被调用一次");
+	await new Promise((r) => setTimeout(r, 120));
+	assert.ok(
+		t.startCalls > callsAfterStart,
+		"握手失败后应自动重试（startCalls 增长）",
+	);
 });

@@ -14,6 +14,8 @@ export interface SupervisorTransport {
 	start(): Promise<void>;
 	stop(): Promise<void>;
 	probe(): Promise<{ ok: boolean; latencyMs: number }>;
+	/** WS 是否已成功握手（2026-08-07 加固：autoReconnect:false 下由 supervisor 感知） */
+	isConnected(): boolean;
 }
 
 export interface ConnectionSupervisorOptions {
@@ -21,6 +23,8 @@ export interface ConnectionSupervisorOptions {
 	tickIntervalMs?: number;
 	probeIntervalMs?: number;
 	silenceSuspectMs?: number;
+	/** 等待 WS 握手完成的时长（2026-08-07 加固） */
+	wsHandshakeTimeoutMs?: number;
 	reconnectBackoffBaseMs?: number;
 	reconnectBackoffMaxMs?: number;
 	downReportEnabled?: boolean;
@@ -33,6 +37,7 @@ export interface ConnectionSupervisorOptions {
 
 const DEFAULT_TICK_MS = 15_000;
 const DEFAULT_PROBE_INTERVAL_MS = 30_000;
+const DEFAULT_WS_HANDSHAKE_TIMEOUT_MS = 10_000;
 const DEFAULT_SILENCE_SUSPECT_MS = 1_200_000;
 const DEFAULT_BACKOFF_BASE_MS = 1_000;
 const DEFAULT_BACKOFF_MAX_MS = 60_000;
@@ -43,6 +48,7 @@ export class ConnectionSupervisor {
 	private readonly transport: SupervisorTransport;
 	private readonly tickIntervalMs: number;
 	private readonly probeIntervalMs: number;
+	private readonly wsHandshakeTimeoutMs: number;
 	private readonly silenceSuspectMs: number;
 	private readonly backoffBaseMs: number;
 	private readonly backoffMaxMs: number;
@@ -69,6 +75,8 @@ export class ConnectionSupervisor {
 		this.transport = options.transport;
 		this.tickIntervalMs = options.tickIntervalMs ?? DEFAULT_TICK_MS;
 		this.probeIntervalMs = options.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS;
+		this.wsHandshakeTimeoutMs =
+			options.wsHandshakeTimeoutMs ?? DEFAULT_WS_HANDSHAKE_TIMEOUT_MS;
 		this.silenceSuspectMs =
 			options.silenceSuspectMs ?? DEFAULT_SILENCE_SUSPECT_MS;
 		this.backoffBaseMs =
@@ -133,6 +141,17 @@ export class ConnectionSupervisor {
 		try {
 			await this.transport.stop(); // clean any half-open state
 			await this.transport.start();
+			// WS 握手等待（2026-08-07 加固：autoReconnect:false，SDK 不再内部无限
+			// 重试）。连接被拒（如 exceed_conn_limit 配额封锁）时 isConnected 恒为
+			// false → 走 catch → 受控退避重试，而不是 SDK 疯狂打点把配额锁得更久。
+			// 握手等待是真实挂钟操作（测试里 fake clock 不前进，用 Date.now）
+			const wsDeadline = Date.now() + this.wsHandshakeTimeoutMs;
+			while (Date.now() < wsDeadline && !this.transport.isConnected()) {
+				await new Promise((r) => setTimeout(r, 200));
+			}
+			if (!this.transport.isConnected()) {
+				throw new Error("WS 握手未完成（可能连接配额受限）");
+			}
 			this.connectAttempts = 0;
 			this.downReported = false;
 			this.setState("connected");
@@ -183,6 +202,15 @@ export class ConnectionSupervisor {
 			this.state === "restarting"
 		) {
 			// 1) Zombie WS detection: silence → unconditional rebuild.
+			// 2026-08-07 加固：连接掉线（isConnected=false）立即重建，
+			// 不等 20 分钟静默；初始连接失败由 connect() 的退避重试处理。
+			if (!this.transport.isConnected()) {
+				this.setState("restarting", "ws disconnected");
+				if (this.downSince === undefined)
+					this.downSince = this.lastEventAt || now;
+				await this.connect();
+				return;
+			}
 			if (now - this.lastEventAt > this.silenceSuspectMs) {
 				// 2026-08-07 诊断：打印触发静默重建时的实际数值
 				console.log(
