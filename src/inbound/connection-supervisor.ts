@@ -184,6 +184,10 @@ export class ConnectionSupervisor {
 		) {
 			// 1) Zombie WS detection: silence → unconditional rebuild.
 			if (now - this.lastEventAt > this.silenceSuspectMs) {
+				// 2026-08-07 诊断：打印触发静默重建时的实际数值
+				console.log(
+					`[supervisor] silence_restart now=${now} lastEventAt=${this.lastEventAt} silenceSuspectMs=${this.silenceSuspectMs} gap=${now - this.lastEventAt}`,
+				);
 				this.setState("restarting", "event silence exceeded threshold");
 				if (this.downSince === undefined)
 					this.downSince = this.lastEventAt || now;
