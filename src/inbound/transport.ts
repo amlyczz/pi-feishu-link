@@ -104,7 +104,9 @@ export interface LarkSdkLike {
 	WSClient: new (opts: {
 		appId: string;
 		appSecret: string;
-		domain: string;
+		// 实机验证（2026-08-07）：domain 运行时默认 Domain.Feishu，显式传入
+		// 会破坏事件投递——类型设为可选，与 SDK 默认行为一致。
+		domain?: string;
 		appType?: number; // AppType enum: 0 = SelfBuild, 1 = ISV
 		loggerLevel?: number;
 	}) => LarkSdkWsClient;
@@ -318,8 +320,7 @@ export class FeishuTransport implements SupervisorTransport {
 			domain,
 		});
 		await this.probeBotOpenId();
-		const dispatcher = new sdk
-			.EventDispatcher({})
+		const dispatcher = new sdk.EventDispatcher({})
 			.register({
 				"im.message.receive_v1": async (data: unknown) =>
 					this.handleRawMessage(data),
@@ -331,11 +332,9 @@ export class FeishuTransport implements SupervisorTransport {
 		this.wsClient = new sdk.WSClient({
 			appId: config.appId,
 			appSecret: config.appSecret,
-			// Must match the Client: appType is the numeric AppType enum — a string
-			// makes the SDK's token manager misroute to the ISV/market path
-			// (“market app request need tenant key”) and the WS never connects.
-			appType: 0, // AppType.SelfBuild
-			domain,
+			// 实机验证（2026-08-07）：WSClient 不需要 appType/domain（REST Client
+			// 才需要 appType 走 token 管理）；这里与 SDK 默认行为一致。真正的坑是
+			// 连接频繁变动会导致飞书事件投递延迟数分钟（连接稳定后恢复秒到）。
 		});
 		this.running = true;
 		try {
