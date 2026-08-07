@@ -3,7 +3,7 @@
 // manages the daemon lifecycle (start/stop/restart/takeover) and attaches
 // read-only via the gateway file lock.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, openSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
@@ -269,11 +269,7 @@ export async function killGatewayOwner(
 	if (!owner) return false;
 	if (owner.pid === process.pid) return false; // we are the owner; handled elsewhere
 	const escalateAfter = opts.sigkillAfterMs ?? 1200;
-	try {
-		process.kill(owner.pid, "SIGTERM");
-	} catch {
-		/* already dead */
-	}
+	killTree(owner.pid, "SIGTERM");
 	const deadline = Date.now() + escalateAfter;
 	let alive = true;
 	while (Date.now() < deadline) {
@@ -286,11 +282,7 @@ export async function killGatewayOwner(
 	if (alive) {
 		// SIGTERM ignored — force-kill so the new owner's WS connection is
 		// not fought over by a hung daemon (user report 2026-08-07).
-		try {
-			process.kill(owner.pid, "SIGKILL");
-		} catch {
-			/* ignore */
-		}
+		killTree(owner.pid, "SIGKILL");
 		await sleep(150);
 	}
 	try {
@@ -299,6 +291,38 @@ export async function killGatewayOwner(
 		/* ignore */
 	}
 	return true;
+}
+
+/**
+ * Kill a process AND its parent chain. The daemon runs as
+ * `bash -lc 'tail -f /dev/null | exec pi …'` and the lock records the pi pid;
+ * its parent is the bash wrapper. Killing only pi orphans the wrapper
+ * (a restart then leaves a zombie bash + tail — reported 2026-08-07).
+ */
+function killTree(pid: number, signal: NodeJS.Signals): void {
+	try {
+		process.kill(pid, signal);
+	} catch {
+		/* already dead */
+	}
+	try {
+		const out = execFileSync(
+			"ps",
+			["-o", "ppid=", "-p", String(pid)],
+			{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000 },
+		)
+			.trim();
+		const ppid = Number(out);
+		if (Number.isInteger(ppid) && ppid > 1 && ppid !== process.pid) {
+			try {
+				process.kill(ppid, signal);
+			} catch {
+				/* ignore */
+			}
+		}
+	} catch {
+		/* ps unavailable */
+	}
 }
 
 /** Signal the current gateway owner to stop (returns true if it was us/killed). */
