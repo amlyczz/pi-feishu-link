@@ -127,17 +127,28 @@ export async function checkEventSubscription(
 		fetch?: typeof globalThis.fetch;
 	} = {},
 ): Promise<EventSubscriptionCheck> {
-	const base = opts.domain === "lark" ? "https://open.larksuite.com" : "https://open.feishu.cn";
+	const base =
+		opts.domain === "lark"
+			? "https://open.larksuite.com"
+			: "https://open.feishu.cn";
 	const fetcher = opts.fetch ?? globalThis.fetch;
 	try {
-		const tokenRes = await fetcher(`${base}/open-apis/auth/v3/tenant_access_token/internal`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
-		});
+		const tokenRes = await fetcher(
+			`${base}/open-apis/auth/v3/tenant_access_token/internal`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+			},
+		);
 		const token = (await tokenRes.json()) as { tenant_access_token?: string };
 		if (!token.tenant_access_token) {
-			return { ok: false, subscribed: [], missing: [REQUIRED_EVENT], error: "token 获取失败" };
+			return {
+				ok: false,
+				subscribed: [],
+				missing: [REQUIRED_EVENT],
+				error: "token 获取失败",
+			};
 		}
 		const appRes = await fetcher(
 			`${base}/open-apis/application/v6/applications/${appId}?lang=zh_cn`,
@@ -153,9 +164,7 @@ export async function checkEventSubscription(
 		};
 		const subscribed =
 			body.data?.app?.callback_info?.subscribed_callbacks ?? [];
-		const missing = subscribed.includes(REQUIRED_EVENT)
-			? []
-			: [REQUIRED_EVENT];
+		const missing = subscribed.includes(REQUIRED_EVENT) ? [] : [REQUIRED_EVENT];
 		return { ok: missing.length === 0, subscribed, missing };
 	} catch (err) {
 		return {
