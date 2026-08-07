@@ -27,6 +27,7 @@ import {
 	saveOverrides,
 } from "./common/config.js";
 import { Logger } from "./common/logger.js";
+import { connectionStatusText } from "./common/connection-status.js";
 import { pickRandomReaction } from "./common/reactions.js";
 import { StatusStore } from "./common/status.js";
 import { DedupeStore } from "./common/dedupe-store.js";
@@ -124,6 +125,23 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	let compensation: MissedMessageCompensation | undefined;
 	let gatewayLock: GatewayLockHandle | undefined;
 	let stopUninstallWatch: (() => void) | undefined;
+
+	// TUI 状态行（2026-08-07）：session_start 只设置一次，setup/start 等命令
+	// 成功后须刷新。session_start 把 ui.setStatus 捕获进 sink，命令侧调用
+	// refreshConnectionStatus() 重算文本。
+	let connectionStatusSink: ((text: string) => void) | undefined;
+	const setConnectionStatus = (text: string): void => {
+		try {
+			connectionStatusSink?.(text);
+		} catch {
+			/* ignore */
+		}
+	};
+	async function refreshConnectionStatus(): Promise<void> {
+		setConnectionStatus(
+			connectionStatusText(loadConfig(), readGatewayOwner(rootDir()), process.pid),
+		);
+	}
 	let botOpenId: string | undefined;
 	let started = false;
 
@@ -1172,7 +1190,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		const ui = (
 			ctx as { ui?: { setStatus?: (key: string, text: string) => void } }
 		).ui;
-		const setStatus = (text: string) => {
+		connectionStatusSink = (text: string) => {
 			try {
 				ui?.setStatus?.("feishu-connection", text);
 			} catch {
@@ -1182,7 +1200,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		statusStore.setConnState("disconnected");
 		const cfg = loadConfig();
 		if (!cfg) {
-			setStatus("飞书桥未配置 → 运行 /feishu setup");
+			setConnectionStatus("飞书桥未配置 → 运行 /feishu setup");
 			return;
 		}
 		const isDaemon = process.env[DAEMON_ENV] === "1";
@@ -1213,13 +1231,13 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			const owner = readGatewayOwner(rootDir());
 			if (owner && owner.pid !== process.pid) {
 				// 卸载/重装不会停止旧 daemon（detached 进程）——明确告诉用户原因和动作。
-				setStatus(
+				setConnectionStatus(
 					`检测到旧 daemon（pid ${owner.pid}）仍持有飞书连接（卸载不会自动停止它）。运行 /feishu takeover 接管，或 /feishu stop 清理`,
 				);
 				return;
 			}
 			if (owner && owner.pid === process.pid) {
-				setStatus("飞书桥已连接（本进程持有）");
+				setConnectionStatus("飞书桥已连接（本进程持有）");
 				return;
 			}
 			// No owner → spawn a detached daemon process.
@@ -1231,13 +1249,13 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					cwd: process.cwd(),
 					waitForOwnerMs: 15_000,
 				});
-				setStatus(
+				setConnectionStatus(
 					result.status === "started"
 						? `飞书桥已启动（daemon pid ${result.pid}）`
 						: `飞书桥启动中…（${result.owner?.pid ?? "?"}）`,
 				);
 			} catch (err) {
-				setStatus(
+				setConnectionStatus(
 					`飞书桥启动失败：${err instanceof Error ? err.message : String(err)}`,
 				);
 			}
@@ -1411,6 +1429,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					notify(
 						"✅ 飞书配置已保存！运行 /feishu start 启动，然后打开飞书搜索你的机器人发任意消息。",
 					);
+					void refreshConnectionStatus();
 					return;
 				}
 				case "start":
@@ -1442,6 +1461,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 							`启动失败：${err instanceof Error ? err.message : String(err)}`,
 						);
 					}
+					void refreshConnectionStatus();
 					return;
 				case "stop":
 					{
@@ -1458,6 +1478,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 							notify("飞书桥已停止。");
 						}
 					}
+					void refreshConnectionStatus();
 					return;
 				case "restart":
 					{
@@ -1490,6 +1511,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 							);
 						}
 					}
+					void refreshConnectionStatus();
 					return;
 				case "takeover":
 					{
@@ -1511,6 +1533,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 							);
 						}
 					}
+					void refreshConnectionStatus();
 					return;
 				case "status":
 					notify(`${formatStatusLine()}\n${statusDetailLines().join("\n")}`);

@@ -250,53 +250,71 @@ test("spawnDaemon reports started when a new live owner registers (daemon pid !=
 });
 
 test("extensionStillRegistered: 本地路径源解析正确", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fb-reg-"));
-  try {
-    const settings = join(dir, "settings.json");
-    writeFileSync(
-      settings,
-      JSON.stringify({ packages: ["./ext", "npm:other-pkg"] }),
-    );
-    const ext = join(dir, "ext");
-    const entry = join(ext, "src", "index.ts");
-    assert.equal(extensionStillRegistered(entry, [settings]), true, "本地源内入口已注册");
-    const outside = join(dir, "elsewhere", "index.ts");
-    assert.equal(extensionStillRegistered(outside, [settings]), false, "源外入口未注册");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+	const dir = mkdtempSync(join(tmpdir(), "fb-reg-"));
+	try {
+		const settings = join(dir, "settings.json");
+		writeFileSync(
+			settings,
+			JSON.stringify({ packages: ["./ext", "npm:other-pkg"] }),
+		);
+		const ext = join(dir, "ext");
+		const entry = join(ext, "src", "index.ts");
+		assert.equal(
+			extensionStillRegistered(entry, [settings]),
+			true,
+			"本地源内入口已注册",
+		);
+		const outside = join(dir, "elsewhere", "index.ts");
+		assert.equal(
+			extensionStillRegistered(outside, [settings]),
+			false,
+			"源外入口未注册",
+		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("extensionStillRegistered: npm 源解析到 npm/node_modules 内", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fb-reg-"));
-  try {
-    const settings = join(dir, "settings.json");
-    writeFileSync(settings, JSON.stringify({ packages: ["npm:pi-feishu-link"] }));
-    const entry = join(
-      homedir(),
-      ".pi",
-      "agent",
-      "npm",
-      "node_modules",
-      "pi-feishu-link",
-      "src",
-      "index.ts",
-    );
-    assert.equal(extensionStillRegistered(entry, [settings]), true);
-    assert.equal(extensionStillRegistered(join(dir, "x.ts"), [settings]), false);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+	const dir = mkdtempSync(join(tmpdir(), "fb-reg-"));
+	try {
+		const settings = join(dir, "settings.json");
+		writeFileSync(
+			settings,
+			JSON.stringify({ packages: ["npm:pi-feishu-link"] }),
+		);
+		const entry = join(
+			homedir(),
+			".pi",
+			"agent",
+			"npm",
+			"node_modules",
+			"pi-feishu-link",
+			"src",
+			"index.ts",
+		);
+		assert.equal(extensionStillRegistered(entry, [settings]), true);
+		assert.equal(
+			extensionStillRegistered(join(dir, "x.ts"), [settings]),
+			false,
+		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("checkUninstallCondition: 入口文件被删 → 退出；无设置文件 → 保守存活", () => {
-  const dir = mkdtempSync(join(tmpdir(), "fb-reg-"));
-  try {
-    const missing = join(dir, "gone", "index.ts");
-    const settings = join(dir, "settings.json");
-    writeFileSync(settings, JSON.stringify({ packages: [] }));
-    assert.equal(checkUninstallCondition(missing, [settings]), false, "入口已删除 → 退出");
-    // 入口存在但设置文件存在且不含本扩展 → 退出
+	const dir = mkdtempSync(join(tmpdir(), "fb-reg-"));
+	try {
+		const missing = join(dir, "gone", "index.ts");
+		const settings = join(dir, "settings.json");
+		writeFileSync(settings, JSON.stringify({ packages: [] }));
+		assert.equal(
+			checkUninstallCondition(missing, [settings]),
+			false,
+			"入口已删除 → 退出",
+		);
+		// 入口存在但设置文件存在且不含本扩展 → 退出
 		const entry = join(dir, "ext", "index.ts");
 		mkdirSync(dirname(entry), { recursive: true });
 		writeFileSync(entry, "", "utf8");
@@ -311,28 +329,30 @@ test("checkUninstallCondition: 入口文件被删 → 退出；无设置文件 �
 			checkUninstallCondition(entry, [join(dir, "no-such-settings.json")]),
 			true,
 		);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("startUninstallWatch: 检测到卸载 → 触发 onExit 并可停止", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "fb-watch-"));
-  try {
-    let exits = 0;
-    const stop = startUninstallWatch({
-      entryPath: join(dir, "gone", "index.ts"), // 不存在 → 立即判定退出
-      settingsFiles: [],
-      intervalMs: 20,
-      onExit: () => { exits += 1; },
-    });
-    await new Promise((r) => setTimeout(r, 80));
-    assert.equal(exits, 1, "onExit 触发一次");
-    stop();
-    const before = exits;
-    await new Promise((r) => setTimeout(r, 80));
-    assert.equal(exits, before, "stop 后不再触发");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+	const dir = mkdtempSync(join(tmpdir(), "fb-watch-"));
+	try {
+		let exits = 0;
+		const stop = startUninstallWatch({
+			entryPath: join(dir, "gone", "index.ts"), // 不存在 → 立即判定退出
+			settingsFiles: [],
+			intervalMs: 20,
+			onExit: () => {
+				exits += 1;
+			},
+		});
+		await new Promise((r) => setTimeout(r, 80));
+		assert.equal(exits, 1, "onExit 触发一次");
+		stop();
+		const before = exits;
+		await new Promise((r) => setTimeout(r, 80));
+		assert.equal(exits, before, "stop 后不再触发");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

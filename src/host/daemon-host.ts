@@ -150,11 +150,25 @@ export function defaultSettingsFiles(): string[] {
  * extension. Returns undefined when the source can't be resolved locally
  * (git:/https:/ssh: URLs are installed into pi-managed caches we don't model).
  */
-function resolveSourceDir(source: string, settingsDir: string): string | undefined {
+function resolveSourceDir(
+	source: string,
+	settingsDir: string,
+): string | undefined {
 	if (source.startsWith("npm:")) {
-		return join(homedir(), ".pi", "agent", "npm", "node_modules", source.slice(4));
+		return join(
+			homedir(),
+			".pi",
+			"agent",
+			"npm",
+			"node_modules",
+			source.slice(4),
+		);
 	}
-	if (source.startsWith("git:") || source.startsWith("https:") || source.startsWith("ssh:")) {
+	if (
+		source.startsWith("git:") ||
+		source.startsWith("https:") ||
+		source.startsWith("ssh:")
+	) {
 		return undefined;
 	}
 	// Local paths (./ ../ / ~ and bare relative paths) resolve against the
@@ -176,18 +190,15 @@ export function extensionStillRegistered(
 	if (present.length === 0) return true;
 	for (const file of present) {
 		try {
-			const raw = JSON.parse(
-				readFileSync(file, "utf8"),
-			) as { packages?: unknown };
+			const raw = JSON.parse(readFileSync(file, "utf8")) as {
+				packages?: unknown;
+			};
 			const pkgs: string[] = Array.isArray(raw?.packages)
 				? raw.packages.filter((p): p is string => typeof p === "string")
 				: [];
 			for (const p of pkgs) {
 				const base = resolveSourceDir(p, dirname(file));
-				if (
-					base &&
-					(entryPath === base || entryPath.startsWith(base + sep))
-				) {
+				if (base && (entryPath === base || entryPath.startsWith(base + sep))) {
 					return true;
 				}
 			}
