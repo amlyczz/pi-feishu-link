@@ -456,7 +456,7 @@ type ForwardConfig = {
   └─ 群策略选择（open/mention）→ 写 config.json（0600）
 ```
 
-- 开放问题 #1：registerApp 建的应用是否自动含"获取群组中所有消息"权限与机器人菜单 → 首次实机验证；若不含，setup 末尾打印一键直达链接（开发者后台对应页面）
+- 开放问题 #1（**已实机验证，2026-08-07**）：registerApp 建的应用**默认只订阅 card.action.trigger，不订阅 im.message.receive_v1**（消息事件）→ WS 连上但收不到消息。修复：setup 传 `addons.events.items.tenant=[im.message.receive_v1]`（buildSetupAddons）+ 创建后 checkEventSubscription 自检并打印开发者后台链接
 
 ### 6.9 `command-controller.ts` — 命令体系（详见 §8）
 

@@ -86,7 +86,7 @@ import {
 	buildMarkdownCard,
 	splitText,
 } from "./presentation/rich-text.js";
-import { runSetup } from "./host/auth-setup.js";
+import { runSetup, buildSetupAddons, checkEventSubscription } from "./host/auth-setup.js";
 import {
 	buildDiagnostics,
 	runDoctorChecks,
@@ -1404,6 +1404,9 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 							const lark = await import("@larksuiteoapi/node-sdk");
 							return lark.registerApp({
 								source: "pi-feishu-link",
+								// 实机验证（2026-08-07，spec 开放问题 #1）：launcher 默认只订阅
+								// card.action.trigger，必须显式传 addons 订阅消息事件 + 权限。
+								addons: buildSetupAddons(),
 								onQRCodeReady(info: { url: string; expireIn: number }) {
 									stage(
 										"📱 请用飞书 App 扫码授权（未收到回调前请勿关闭本窗口）",
@@ -1431,14 +1434,35 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 								client_secret?: string;
 								user_info?: { tenant_brand?: string };
 							}>;
-						},
-					});
-					notify(
-						"✅ 飞书配置已保存！运行 /feishu start 启动，然后打开飞书搜索你的机器人发任意消息。",
+					},
+				});
+				// 自检事件订阅（2026-08-07 实机验证修复）：确认应用订阅了
+				// im.message.receive_v1，否则 WS 连上但收不到任何消息。
+				const setupCfg = loadConfig();
+				if (setupCfg?.appId) {
+					const check = await checkEventSubscription(
+						setupCfg.appId,
+						setupCfg.appSecret,
+						{ domain: setupCfg.domain },
 					);
-					void refreshConnectionStatus();
-					return;
+					if (check.ok) {
+						stage("✅ 事件订阅自检通过：im.message.receive_v1 已订阅");
+					} else {
+						stage("⚠️ 事件订阅自检失败：应用未订阅消息事件，连上但收不到消息！");
+						stage(
+							`   请到开发者后台补充订阅：https://open.feishu.cn/app/${setupCfg.appId}/event`,
+						);
+						notify(
+							`⚠️ 应用未订阅 im.message.receive_v1，收不到消息。请到开发者后台→事件与回调→添加该事件（长连接方式）：open.feishu.cn/app/${setupCfg.appId}/event`,
+						);
+					}
 				}
+				notify(
+					"✅ 飞书配置已保存！运行 /feishu start 启动，然后打开飞书搜索你的机器人发任意消息。",
+				);
+				void refreshConnectionStatus();
+				return;
+			}
 				case "start":
 					// TUI-side: manage the daemon lifecycle (FR-15).
 					try {

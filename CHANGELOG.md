@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.5 (2026-08-07)
+
+### 实机验证修复：应用未订阅 im.message.receive_v1 → 消息事件永远收不到（用户报告）
+
+- **根因**（spec 开放问题 #1 实机验证）：`registerApp` 扫码创建的应用默认只订阅 `card.action.trigger`，**不会订阅 `im.message.receive_v1`**（消息事件）——WS 长连接连得上（websocket 模式开着）、卡片能用，但**任何连接都收不到消息事件**
+- 证据：`application/v6/applications/{id}` 返回 `callback_info.subscribed_callbacks = ["card.action.trigger"]`
+- **修复**：setup 时给 `registerApp` 传 `addons`（`events.items.tenant: [im.message.receive_v1]` + 权限 scopes + 卡片回调）；新增 `buildSetupAddons()` 纯函数
+- **自检兜底**：setup 完成后自动调 `checkEventSubscription()` 确认订阅状态，缺失则打印开发者后台直达链接（`open.feishu.cn/app/{id}/event`）——这类故障从此可自查
+- **存量应用**（已用旧流程创建）：需在开发者后台手动补订阅，或重新 `/feishu setup`（新应用自动带订阅）
+
+**测试**：212 → **216 项全绿**（addons 形状 1 + 订阅自检 3）。
+
 ## 0.1.4 (2026-08-07)
 
 ### 卸载自动停 daemon（用户报告：卸载后旧 daemon 仍占连接）
