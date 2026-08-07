@@ -1806,8 +1806,16 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 				};
 			}
 			if (!outbox || !conversations) {
+				// 2026-08-08：工具依赖 daemon 进程的 bridge（outbox/conversations）。
+				// 仅在 daemon 的模型会话（飞书消息触发的回合）里可用；
+				// TUI 会话直接调用时当前进程未初始化 bridge → 明确提示。
 				return {
-					content: [{ type: "text", text: "桥接未启动，无法发送文件" }],
+					content: [
+						{
+							type: "text",
+							text: "无法发送：当前会话未运行飞书桥（请在飞书对话里说「发送文件 xxx」，由 daemon 处理；或确认 /feishu start 已启动）。",
+						},
+					],
 					details: { path: p.path, caption: p.caption },
 					isError: true,
 				};
