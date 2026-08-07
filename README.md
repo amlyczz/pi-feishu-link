@@ -51,7 +51,7 @@ pi                                    # 启动 pi
 
 然后打开飞书，搜索你的机器人，发任意消息——收到欢迎卡即端到端连通（你的消息会带随机表情回执，任务完成打 ✅）。
 
-> 群聊免 @ 需机器人在飞书开发者后台开启 **「获取群组中所有消息」** 权限（setup 自动申请，敏感权限需审核发布）。未开启时群聊自动回退到「@ 触发」模式；`/support` 会自检并提示。
+> 群聊免 @：setup 扫码创建应用时**已自动申请全部所需权限**（消息事件 + 群聊全量 + 表情），发布即生效，无需手动配置。
 
 ## 命令
 
@@ -143,14 +143,6 @@ npm run check   # tsc --noEmit
 | [yangtuooc/pi-feishu-lark](https://github.com/yangtuooc/pi-feishu-lark)（@xjuai fork） | CardKit 流式卡片、重试、配置热更新、定时任务路由 | 无连接活性监督 → ConnectionSupervisor + 断连补收 |
 | [@ineersa/my-pi-scheduler](https://github.com/ineersa/my-pi-scheduler) | 定时任务——**选定复用，不自造轮子** | 桥接层零侵入，结果经路由回投飞书 |
 | [pi-agent-qqbot](https://github.com/gtiders/pi-agent-qqbot) | ReplyBudget、网关所有权 | QQ 官方 API 无免 @ 群消息 → 转向飞书 |
-
-## 已知限制
-
-1. 群 open（免 @）策略依赖「获取群组中所有消息」敏感权限（setup 自动申请，需审核发布）
-2. `/settings` `/export` `/fork` `/clone` `/tree` 等 pi 交互式选择器命令暂未深度适配（明确降级提示）
-3. 语音入站不支持（飞书无官方 ASR），收到语音提示改用文字/图片
-4. 断连补收依赖「读取历史消息」权限，超出窗口的消息不保证
-5. 黑名单是静态模式匹配：`rm -rf $ROOT` 这类变量间接命令无法静态识别（公网部署可配 `allowUsers` 白名单强隔离）
 
 ## License
 
