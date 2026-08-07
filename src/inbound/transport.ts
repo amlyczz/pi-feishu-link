@@ -5,6 +5,7 @@
 
 import { RetryableError, FatalDeliveryError } from "../outbound/outbox.js";
 import type { FeishuConfig, FeishuInboundMessage } from "../common/types.js";
+import { parseBotMenuEvent } from "./bot-menu.js";
 import type { SupervisorTransport } from "./connection-supervisor.js";
 
 // ---- structural SDK interfaces (the real @larksuiteoapi/node-sdk matches) ----
@@ -245,6 +246,8 @@ export interface FeishuTransportDeps {
 	config: FeishuConfig;
 	onMessage: (msg: FeishuInboundMessage) => Promise<void>;
 	onCardAction: (action: CardAction) => Promise<unknown>;
+	/** 机器人菜单事件（application.bot.menu_v6，2026-08-07 新增） */
+	onBotMenu?: (menu: { eventKey: string; operatorOpenId: string }) => Promise<unknown>;
 	logger?: {
 		debug(event: string, data?: Record<string, unknown>): void;
 		error(event: string, data?: Record<string, unknown>): void;
@@ -334,6 +337,10 @@ export class FeishuTransport implements SupervisorTransport {
 			.register({
 				"card.action.trigger": async (data: unknown) =>
 					this.handleCardAction(data),
+			})
+			.register({
+				"application.bot.menu_v6": async (data: unknown) =>
+					this.handleBotMenu(data),
 			});
 		this.wsClient = new sdk.WSClient({
 			appId: config.appId,
@@ -431,6 +438,58 @@ export class FeishuTransport implements SupervisorTransport {
 				error: String(err),
 			});
 		});
+	}
+
+	/**
+	 * 机器人菜单事件：解析后交给 onBotMenu 回调（index.ts 路由为命令）。
+	 * 事件体无 chat_id，回复须走 sendMessageByOpenId。
+	 */
+	private async handleBotMenu(data: unknown): Promise<unknown> {
+		const menu = parseBotMenuEvent(data);
+		if (!menu) {
+			this.deps.logger?.debug("feishu.menu.ignored", {
+				data: String(data).slice(0, 200),
+			});
+			return;
+		}
+		this.deps.logger?.debug("feishu.menu.received", { ...menu });
+		return this.deps.onBotMenu?.(menu);
+	}
+
+	/**
+	 * 通过 open_id 向用户私聊发送（机器人菜单事件无 chat_id，只能按人发）。
+	 * 飞书自动路由到该用户与 bot 的 p2p 会话（首次自动创建）；
+	 * 响应含 chat_id，可据此绑定路由表。
+	 */
+	async sendMessageByOpenId(
+		openId: string,
+		payload:
+			| { type: "text"; text: string }
+			| { type: "card"; card: unknown },
+	): Promise<{ messageId?: string; chatId?: string }> {
+		if (!this.client) throw new FatalDeliveryError("transport not started");
+		const data =
+			payload.type === "text"
+				? {
+						msg_type: "text",
+						content: JSON.stringify({ text: payload.text }),
+					}
+				: {
+						msg_type: "interactive",
+						content: JSON.stringify(payload.card),
+					};
+		const res = (await withTimeout(
+			this.client.im.message.create({
+				params: { receive_id_type: "open_id" },
+				data: { receive_id: openId, ...data },
+			}),
+			SEND_TIMEOUT_MS,
+			"sendMessageByOpenId",
+		)) as { data?: { message_id?: string; chat_id?: string } };
+		return {
+			messageId: res?.data?.message_id,
+			chatId: res?.data?.chat_id,
+		};
 	}
 
 	private async handleCardAction(data: unknown): Promise<unknown> {

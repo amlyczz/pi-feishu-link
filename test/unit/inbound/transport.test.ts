@@ -468,3 +468,61 @@ test("M3: business error codes (HTTP 200 + code) classify deterministically", ()
 	assert.equal(classifyError({ code: 0, msg: "ok" }).kind, "retryable");
 	assert.equal(classifyError(new Error("boom")).kind, "retryable");
 });
+
+test("机器人菜单事件：注册 application.bot.menu_v6 并转发 onBotMenu", async () => {
+	const { sdk, ws } = makeSdk();
+	const menus: Array<{ eventKey: string; operatorOpenId: string }> = [];
+	const t = new FeishuTransport({
+		sdk,
+		config: makeConfig(),
+		onMessage: async () => {},
+		onCardAction: async () => undefined,
+		onBotMenu: async (m) => {
+			menus.push(m);
+		},
+	});
+	await t.start();
+	const handler = ws.dispatcher?.handlers["application.bot.menu_v6"];
+	assert.ok(handler, "应注册 application.bot.menu_v6 处理器");
+	// SDK 拍平结构
+	await handler({
+		event_key: "status",
+		operator: { operator_id: { open_id: "ou_menu" } },
+	});
+	assert.deepEqual(menus, [{ eventKey: "status", operatorOpenId: "ou_menu" }]);
+	// schema 2.0 原始结构
+	await handler({
+		schema: "2.0",
+		event: {
+			event_key: "help",
+			operator: { operator_id: { open_id: "ou_menu2" } },
+		},
+	});
+	assert.deepEqual(menus[1], { eventKey: "help", operatorOpenId: "ou_menu2" });
+	// 无效事件 → 不转发
+	await handler({ event_key: "" });
+	assert.equal(menus.length, 2);
+});
+
+test("sendMessageByOpenId：以 open_id 发送并返回 message_id（fake 无 chat_id）", async () => {
+	const { sdk, client } = makeSdk();
+	const t = new FeishuTransport({
+		sdk,
+		config: makeConfig(),
+		onMessage: async () => {},
+		onCardAction: async () => undefined,
+	});
+	await t.start();
+	const before = client.records.length;
+	const res = await t.sendMessageByOpenId("ou_target", {
+		type: "text",
+		text: "hi",
+	});
+	const created = client.records.slice(before);
+	assert.ok(
+		created.some((r) => String(r.path).startsWith("create:ou_target:text")),
+		"应按 open_id 发送文本",
+	);
+	assert.equal(res.messageId, "out-2");
+	assert.equal(res.chatId, undefined); // fake 未返回 chat_id
+});

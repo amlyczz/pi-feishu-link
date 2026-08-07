@@ -146,3 +146,15 @@
 - 出站媒体走 SDK `im.v1.image/file.create`，实机参数细节（FormData 形状）需沙箱验证
 - 语音入站明确不支持（飞书无官方 ASR）
 - 断连窗口内入站消息无法补偿（恢复通知提示"可能漏收"）
+
+## 0.1.6 (2026-08-07)
+
+### 机器人自定义菜单（bot-customized-menu，用户需求 FR-7）
+
+- **事件订阅**：`application.bot.menu_v6`（菜单点按 → event_key 推送）；`buildSetupAddons` 自动订阅 + `checkEventSubscription` 自检覆盖
+- **命令管线复用**：菜单点按 → `parseBotMenuEvent`（兼容 schema2.0/拍平）→ event_key → 命令（help/status/new/resume/model/schedule/stop）→ 走既有 handleCommand，回复经 Outbox 可靠投递
+- **无 chat_id 回复路径**：`sendMessageByOpenId`（im.message.create receive_id_type=open_id，返回 chat_id 可绑路由）+ 合成消息 `replyViaOpenId` 兜底
+- **setup 引导**：配置路径（开发者后台 → 机器人 → 自定义菜单）+ 推荐菜单结构 + 两种动作说明
+- 菜单只能在开发者后台配置（无 OpenAPI）：事件侧已全自动，用户只需照引导配菜单并发布
+
+**测试**：216 → **226 项全绿**（bot-menu 7 + transport 2 + auth-setup 拆分 1）。

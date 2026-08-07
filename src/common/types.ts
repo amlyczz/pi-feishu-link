@@ -113,6 +113,11 @@ export interface FeishuInboundMessage {
 	threadId?: string;
 	mentions?: Array<{ id?: { open_id?: string; union_id?: string } }>;
 	timestamp: number;
+	/**
+	 * 机器人菜单事件合成消息专用（2026-08-07）：菜单事件无 chat_id，
+	 * 回复兜底按 open_id 直发（sendMessageByOpenId）。
+	 */
+	replyViaOpenId?: string;
 }
 
 /** Conversation key: p2p → userOpenId, group → chatId (topic-aware). */
