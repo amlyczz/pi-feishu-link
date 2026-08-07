@@ -139,7 +139,11 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	};
 	async function refreshConnectionStatus(): Promise<void> {
 		setConnectionStatus(
-			connectionStatusText(loadConfig(), readGatewayOwner(rootDir()), process.pid),
+			connectionStatusText(
+				loadConfig(),
+				readGatewayOwner(rootDir()),
+				process.pid,
+			),
 		);
 	}
 	let botOpenId: string | undefined;
@@ -391,6 +395,9 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		// backfilled message would be dropped as "already seen".
 		if (!opts.skipDedupe && !dedupe.admit(msg.messageId)) return;
 		if (msg.senderType === "bot") return;
+		// 真实入站计数（2026-08-07）：此前 recordInbound 从未被调用，
+		// inboundCount 恒为 0，诊断误导（"零事件"误判）。
+		statusStore.recordInbound();
 		const cfg = loadConfig();
 		if (!cfg) return;
 		if (cfg.allowUsers.length > 0 && !cfg.allowUsers.includes(msg.senderOpenId))
