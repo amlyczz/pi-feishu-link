@@ -36,7 +36,7 @@
 ## 快速开始
 
 ```bash
-pi install npm:pi-feishu-link   # 或 clone 后 pi install .
+pi install git:github.com/amlyczz/pi-feishu-link   # 或 clone 后: cd pi-feishu-link && pi install .
 pi                                 # 启动 pi
 /feishu setup                      # 终端出二维码 → 手机扫码 → 凭据自动写入
 /feishu start                      # 启动桥接（daemon 常驻，TUI 关闭不断线）
@@ -180,7 +180,7 @@ MIT
 ## Quickstart
 
 ```bash
-pi install npm:pi-feishu-link   # or clone then: pi install .
+pi install git:github.com/amlyczz/pi-feishu-link   # or clone then: cd pi-feishu-link && pi install .
 pi                                 # start pi
 /feishu setup                      # scan the QR in your terminal
 /feishu start                      # start the daemon (survives TUI exit)
