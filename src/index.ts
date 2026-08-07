@@ -30,6 +30,7 @@ import { Logger } from "./common/logger.js";
 import { connectionStatusText } from "./common/connection-status.js";
 import { pickRandomReaction } from "./common/reactions.js";
 import { StatusStore } from "./common/status.js";
+import { detectSchedulerInstalled } from "./common/scheduler-detect.js";
 import { DedupeStore } from "./common/dedupe-store.js";
 import { OutboundRouter } from "./outbound/outbound-router.js";
 import { Outbox, FatalDeliveryError } from "./outbound/outbox.js";
@@ -312,6 +313,16 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			return;
 		}
 		if (verdict.kind === "scheduler") {
+			// 可选依赖（FR-11）：my-pi-scheduler 未安装 → 明确提示，不打扰模型。
+			if (!detectSchedulerInstalled()) {
+				await replyTo(
+					msg,
+					buildSimpleTextCard(
+						"⏰ 定时任务功能需要安装 my-pi-scheduler（可选依赖，不影响其他功能）。\n\n在 pi 终端运行：\n  pi install npm:@ineersa/my-pi-scheduler\n\n重启 pi 后即可使用 /loop、/remind、/schedule 或在聊天里直接说「每天 9 点总结 commit」。",
+					),
+				);
+				return;
+			}
 			// Route to the model via the conversation (natural-language scheduler).
 			await handleConversationMessage(
 				msg,
@@ -934,7 +945,8 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		statusStore.update({
 			residentSessions: 0,
 			maxResident: cfg.sessions.maxResident,
-			schedulerDetected: Boolean(loadOverrides()?.schedulerEnabled),
+			schedulerDetected:
+				detectSchedulerInstalled() || Boolean(loadOverrides()?.schedulerEnabled),
 		});
 		// periodic eviction + status refresh + stream-card TTL sweep (M4/M5)
 		setInterval(() => {

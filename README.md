@@ -37,13 +37,13 @@
 
 ```bash
 pi install git:github.com/amlyczz/pi-feishu-link   # 或 clone 后: cd pi-feishu-link && pi install .
-pi install npm:@ineersa/my-pi-scheduler            # 前置依赖：定时任务（/loop /remind /schedule）
+pi install npm:@ineersa/my-pi-scheduler            # 可选：定时任务（不装不影响其他功能）
 pi                                 # 启动 pi
 /feishu setup                      # 终端出二维码 → 手机扫码 → 凭据自动写入
 /feishu start                      # 启动桥接（daemon 常驻，TUI 关闭不断线）
 ```
 
-> ⏰ **定时任务前置依赖**：定时任务（FR-11）复用 [`@ineersa/my-pi-scheduler`](https://github.com/ineersa/my-pi-scheduler)。未安装时飞书发 `/loop /remind /schedule` 会提示先安装；已安装则**直接在飞书聊天里说**「每天 9 点总结 commit」即可创建，到点结果自动回投会话（重启 pi 后生效）。
+> ⏰ **定时任务 = 可选依赖**（不自动安装，动态检测）：不装 my-pi-scheduler，其他功能完全不受影响；装了就多出定时任务能力。**安装后重启 pi 生效**，然后直接在飞书聊天里说「每天 9 点总结 commit」即可创建，到点结果自动回投会话。未安装时发 `/loop /remind /schedule` 会收到明确的安装指引（含一键复制命令）。
 
 然后打开飞书，搜索你的机器人，发任意消息——收到欢迎卡即端到端连通。
 

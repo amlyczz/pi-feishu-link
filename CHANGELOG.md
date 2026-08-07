@@ -152,3 +152,4 @@
 - **移除机器人菜单功能**（用户决定放弃；`application.bot.menu_v6` 订阅/命令管线已 revert，测试回到 217）
 - **恢复 .spec 1835/1905 文档**（revert 误删后从原提交恢复，菜单章节标记为放弃）
 - **前置依赖安装**：README 快速开始新增 `pi install npm:@ineersa/my-pi-scheduler`（定时任务前置依赖）
+- **定时任务改为可选依赖**：新增 `detectSchedulerInstalled()`（settings.json packages / node_modules 双通道探测，含 object form）；未安装时 `/loop /remind /schedule` 回复明确安装指引（不再路由给模型瞎猜）；`schedulerDetected` 状态改为自动检测（overrides 可手动覆盖）
