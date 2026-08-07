@@ -54,10 +54,6 @@ import {
 	wrapSendError,
 	normalizeInbound,
 } from "./inbound/transport.js";
-import {
-	menuKeyToCommand,
-	buildMenuGuideText,
-} from "./inbound/bot-menu.js";
 import { MissedMessageCompensation } from "./inbound/missed-compensation.js";
 import { probeGroupMessagePermission } from "./inbound/permission-probe.js";
 import {
@@ -259,20 +255,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	): Promise<void> {
 		if (!outbox) return;
 		const route = router.getRoute(conversationKeyFor(msg));
-		// 菜单事件无 chat_id 且无既有路由时：按 open_id 直发兜底
-		//（占位绑定失败等极端情况，保证回复不丢）
-		if (!route && msg.replyViaOpenId && transport) {
-			const payload =
-				typeof textOrCard === "string"
-					? { type: "text" as const, text: textOrCard }
-					: { type: "card" as const, card: textOrCard };
-			try {
-				await transport.sendMessageByOpenId(msg.replyViaOpenId, payload);
-			} catch {
-				// 发送失败：静默（用户可重试）
-			}
-			return;
-		}
 		const routeRef: RouteRef = route
 			? {
 					conversationKey: route.sessionKey,
@@ -403,66 +385,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			default:
 				await replyTo(msg, `命令 /${verdict.name} 已收到。`);
 		}
-	}
-
-	// ---------------- 机器人菜单（application.bot.menu_v6）----------------
-
-	/**
-	 * 菜单事件 → 合成命令消息 → 走既有命令管线。
-	 * 菜单事件无 chat_id：有既有路由走 outbox，否则先按 open_id 占位发送
-	 * 获取 chat_id 绑定路由，再执行命令（保证回复可达，含 /schedule 等会话型命令）。
-	 */
-	async function handleBotMenuEvent(menu: {
-		eventKey: string;
-		operatorOpenId: string;
-	}): Promise<void> {
-		const cmdText = menuKeyToCommand(menu.eventKey);
-		if (!cmdText) {
-			// 未知菜单项：发帮助提示（按 open_id 直发）
-			await transport?.sendMessageByOpenId(menu.operatorOpenId, {
-				type: "text",
-				text: "未知菜单项。发送 /help 查看可用功能。",
-			});
-			return;
-		}
-		const cmd = parseCommand(cmdText);
-		if (!cmd) return;
-		const key = `p2p:${menu.operatorOpenId}`;
-		if (!router.getRoute(key) && transport) {
-			// 首次使用菜单（无既有会话路由）：按 open_id 占位发送拿到 chat_id
-			const probe = await transport.sendMessageByOpenId(menu.operatorOpenId, {
-				type: "text",
-				text: "⏳",
-			});
-			if (probe.chatId) {
-				const probeMsg = synthesizeMenuMessage(menu, probe.chatId);
-				router.bindConversation(
-					key,
-					probeMsg,
-					conversations?.peekSessionId(key),
-				);
-			}
-		}
-		await handleCommand(synthesizeMenuMessage(menu, ""), cmd);
-	}
-
-	/** 合成菜单触发消息（chatId 未知时传空串，回复走路由表/兜底）。 */
-	function synthesizeMenuMessage(
-		menu: { eventKey: string; operatorOpenId: string },
-		chatId: string,
-	): FeishuInboundMessage {
-		return {
-			messageId: `menu:${menu.eventKey}:${Date.now()}:${menu.operatorOpenId.slice(-6)}`,
-			chatId,
-			chatType: "p2p",
-			chatMode: "p2p",
-			senderOpenId: menu.operatorOpenId,
-			senderType: "user",
-			msgType: "text",
-			content: JSON.stringify({ text: menuKeyToCommand(menu.eventKey) }),
-			timestamp: Date.now(),
-			replyViaOpenId: menu.operatorOpenId,
-		};
 	}
 
 	// ---------------- inbound pipeline ----------------
@@ -857,7 +779,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		transport = await createFeishuTransport(cfg, {
 			onMessage: (m) => handleInbound(m),
 			onCardAction: (action) => handleCardAction(action),
-			onBotMenu: (menu) => handleBotMenuEvent(menu),
 			logger,
 		});
 		botOpenId = transport.getBotOpenId();
@@ -1548,13 +1469,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					notify(
 						"✅ 飞书配置已保存！运行 /feishu start 启动，然后打开飞书搜索你的机器人发任意消息。",
 					);
-					// 机器人菜单引导（2026-08-07）：菜单只能在开发者后台配置，无 API；
-					// 菜单事件订阅已随 addons 自动完成。
-					if (setupCfg?.appId) {
-						stage(
-							buildMenuGuideText(setupCfg.appId, setupCfg.domain ?? "feishu"),
-						);
-					}
 					void refreshConnectionStatus();
 					return;
 				}

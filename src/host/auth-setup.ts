@@ -24,10 +24,6 @@ export interface SetupAddons {
 
 /** 桥接必需的事件订阅：im.message.receive_v1（消息到达） */
 export const REQUIRED_EVENT = "im.message.receive_v1";
-/** 机器人自定义菜单事件（2026-08-07：菜单点按 → event_key 推送到服务器） */
-export const MENU_EVENT = "application.bot.menu_v6";
-/** 桥接必需的全部事件（消息 + 菜单） */
-export const REQUIRED_EVENTS: readonly string[] = [REQUIRED_EVENT, MENU_EVENT];
 /** 桥接依赖的权限范围 */
 export const SETUP_SCOPES: readonly string[] = [
 	"im:message",
@@ -40,7 +36,7 @@ export const SETUP_SCOPES: readonly string[] = [
 export function buildSetupAddons(): SetupAddons {
 	return {
 		scopes: { tenant: [...SETUP_SCOPES] },
-		events: { items: { tenant: [...REQUIRED_EVENTS] } },
+		events: { items: { tenant: [REQUIRED_EVENT] } },
 		callbacks: { items: ["card.action.trigger"] },
 	};
 }
@@ -136,7 +132,7 @@ export async function checkEventSubscription(
 			? "https://open.larksuite.com"
 			: "https://open.feishu.cn";
 	const fetcher = opts.fetch ?? globalThis.fetch;
-		try {
+	try {
 		const tokenRes = await fetcher(
 			`${base}/open-apis/auth/v3/tenant_access_token/internal`,
 			{
@@ -150,7 +146,7 @@ export async function checkEventSubscription(
 			return {
 				ok: false,
 				subscribed: [],
-				missing: [...REQUIRED_EVENTS],
+				missing: [REQUIRED_EVENT],
 				error: "token 获取失败",
 			};
 		}
@@ -168,15 +164,13 @@ export async function checkEventSubscription(
 		};
 		const subscribed =
 			body.data?.app?.callback_info?.subscribed_callbacks ?? [];
-		const missing = REQUIRED_EVENTS.filter(
-			(evt) => !subscribed.includes(evt),
-		);
+		const missing = subscribed.includes(REQUIRED_EVENT) ? [] : [REQUIRED_EVENT];
 		return { ok: missing.length === 0, subscribed, missing };
 	} catch (err) {
 		return {
 			ok: false,
 			subscribed: [],
-			missing: [...REQUIRED_EVENTS],
+			missing: [REQUIRED_EVENT],
 			error: err instanceof Error ? err.message : String(err),
 		};
 	}

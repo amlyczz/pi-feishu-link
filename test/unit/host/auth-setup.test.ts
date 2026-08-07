@@ -134,7 +134,7 @@ test("buildSetupAddons: 事件订阅包含 im.message.receive_v1 + 卡片回调 
 	assert.deepEqual(keys.sort(), ["callbacks", "events", "scopes"]);
 });
 
-test("checkEventSubscription: 已订阅全部必需事件 → ok", async () => {
+test("checkEventSubscription: 已订阅 → ok", async () => {
 	const res = await checkEventSubscription("cli_x", "s", {
 		fetch: (async (url: string) => {
 			if (url.includes("/auth/v3/tenant_access_token")) {
@@ -143,17 +143,7 @@ test("checkEventSubscription: 已订阅全部必需事件 → ok", async () => {
 			return new Response(
 				JSON.stringify({
 					code: 0,
-					data: {
-						app: {
-							callback_info: {
-								subscribed_callbacks: [
-									"card.action.trigger",
-									"im.message.receive_v1",
-									"application.bot.menu_v6",
-								],
-							},
-						},
-					},
+					data: { app: { callback_info: { subscribed_callbacks: ["card.action.trigger", "im.message.receive_v1"] } } },
 				}),
 			);
 		}) as typeof fetch,
@@ -162,7 +152,7 @@ test("checkEventSubscription: 已订阅全部必需事件 → ok", async () => {
 	assert.deepEqual(res.missing, []);
 });
 
-test("checkEventSubscription: 缺 receive_v1 + menu → 报全部缺失", async () => {
+test("checkEventSubscription: 未订阅 receive_v1 → 报缺失（当前 bug 的检测）", async () => {
 	const res = await checkEventSubscription("cli_x", "s", {
 		fetch: (async (url: string) => {
 			if (url.includes("/auth/v3/tenant_access_token")) {
@@ -171,22 +161,13 @@ test("checkEventSubscription: 缺 receive_v1 + menu → 报全部缺失", async 
 			return new Response(
 				JSON.stringify({
 					code: 0,
-					data: {
-						app: {
-							callback_info: {
-								subscribed_callbacks: ["card.action.trigger"],
-							},
-						},
-					},
+					data: { app: { callback_info: { subscribed_callbacks: ["card.action.trigger"] } } },
 				}),
 			);
 		}) as typeof fetch,
 	});
 	assert.equal(res.ok, false);
-	assert.deepEqual(res.missing, [
-		"im.message.receive_v1",
-		"application.bot.menu_v6",
-	]);
+	assert.deepEqual(res.missing, ["im.message.receive_v1"]);
 });
 
 test("checkEventSubscription: token 失败 → error 且缺失", async () => {
