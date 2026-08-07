@@ -210,16 +210,24 @@ export interface RawInbound {
 export function normalizeInbound(
 	raw: unknown,
 ): FeishuInboundMessage | undefined {
-	const msg = (raw ?? {}) as RawInbound;
+	const root = (raw ?? {}) as Record<string, unknown>;
+	// SDK dispatcher 可能传 { event: {...} } 包装；剥掉取事件体。
+	const body = (root.event ?? root) as Record<string, unknown>;
+	// v2.0：消息字段在 event.message 子对象、sender 在 event 顶层；
+	// v1.0：字段全在顶层。message_id 在嵌套里时旧实现直接丢弃（2026-08-08 修复）。
+	const msg = (body.message ?? body ?? {}) as RawInbound;
 	if (!msg.message_id) return undefined;
 	const chatType = msg.chat_type === "group" ? "group" : "p2p";
+	const sender = (body.sender ?? msg.sender ?? {}) as
+		| { sender_type?: string; sender_id?: { open_id?: string } }
+		| undefined;
 	return {
 		messageId: msg.message_id,
 		chatId: msg.chat_id ?? "",
 		chatType,
 		chatMode: chatType === "p2p" ? "p2p" : "group",
-		senderOpenId: msg.sender?.sender_id?.open_id ?? "unknown",
-		senderType: msg.sender?.sender_type ?? "user",
+		senderOpenId: sender?.sender_id?.open_id ?? "unknown",
+		senderType: sender?.sender_type ?? "user",
 		msgType: msg.message_type ?? "text",
 		content: msg.content ?? "",
 		rootId: msg.root_id,

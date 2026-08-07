@@ -44,6 +44,7 @@ import {
 	spawnDaemon,
 	stopDaemon,
 	startUninstallWatch,
+	cleanupStateDirIfUninstalled,
 	DAEMON_ENV,
 } from "./host/daemon-host.js";
 import { ConversationManager } from "./sessions/conversation-manager.js";
@@ -63,10 +64,14 @@ import {
 	readGatewayOwner,
 	type GatewayLockHandle,
 } from "./host/gateway-lock.js";
+import { parseCommand } from "./commands/command-controller.js";
 import {
-	classifyCommand,
-	parseCommand,
-} from "./commands/command-controller.js";
+	isPiCommand,
+	runPiCommand,
+	tryConsumeSelect,
+	getPendingSelect,
+	type PiCommandDeps,
+} from "./commands/pi-command-adapter.js";
 import {
 	shouldAcceptGroupMessage,
 	extractPlainTextForTrigger,
@@ -125,6 +130,8 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	let outbox: Outbox | undefined;
 	let liveChannel: LiveChannel | undefined;
 	let conversations: ConversationManager | undefined;
+	// 2026-08-08：backend 引用（/login API key 通道 + 命令适配）。
+	let piBackend: PiSessionBackend | undefined;
 	let turnSupervisor: TurnSupervisor | undefined;
 	let bridgeRuntime: BridgeRuntime | undefined;
 	let permissionBridge: PermissionBridge | undefined;
@@ -160,6 +167,11 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	const streamCards = new Map<
 		string,
 		{ messageId: string; text: string; touchedAt: number }
+	>();
+	// 2026-08-08 流式修复（spec §3.1 B1）：cardId → 回复目标（真实 messageId/chatId）。
+	const streamTargets = new Map<
+		string,
+		{ messageId?: string; chatId: string }
 	>();
 	// C1/I7: toolCallId → conversation key (stashed by the tool_call gate so
 	// feishu_send_local_file can target the CURRENT chat, not an arbitrary one).
@@ -296,26 +308,112 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		return `group:${msg.chatId}`;
 	}
 
+	/**
+	 * 命令执行完成 → 对触发消息打 DONE 表情（2026-08-08 用户指令：
+	 * /workspace /new 等命令完成后与普通文本消息一样有 DONE 回执）。
+	 * best-effort：失败静默忽略，不阻塞命令回复。
+	 */
+	function markDone(msg: FeishuInboundMessage): void {
+		const cfg = loadConfig();
+		if (!cfg?.forward.reactions.enabled) return;
+		void transport?.addReaction(
+			msg.messageId,
+			cfg.forward.reactions.doneEmoji || "DONE",
+		);
+	}
+
 	async function handleCommand(
 		msg: FeishuInboundMessage,
 		cmd: { name: string; rawArgs: string; args: string[] },
+		rawText: string,
 	): Promise<void> {
 		const key = conversationKeyFor(msg);
-		const isAdmin = isAdminUser(msg.senderOpenId);
-		const verdict = classifyCommand(cmd, isAdmin);
-		if (verdict.kind === "blocked") {
-			await replyTo(
-				msg,
-				`命令 /${verdict.name} 不可用。输入 /help 查看可用命令。`,
-			);
+		const name = cmd.name;
+		// 1) 桥特有命令（status/workspace/support/feishu-config/stop/help）
+		if (
+			[
+				"help",
+				"status",
+				"stop",
+				"workspace",
+				"support",
+				"feishu-config",
+			].includes(name)
+		) {
+			switch (name) {
+				case "help":
+					await replyTo(msg, buildHelpCard());
+					break;
+				case "status":
+					await replyTo(
+						msg,
+						buildStatusCard(formatStatusLine(), statusDetailLines()),
+					);
+					break;
+				case "stop":
+					await conversations?.disposeActiveFor(key);
+					await replyTo(msg, "已停止当前任务。");
+					break;
+				case "workspace":
+					try {
+						const ws = await conversations?.switchWorkspace(key, cmd.args[0]);
+						await replyTo(msg, `当前工作区：${ws ?? "未切换"}`);
+					} catch (err) {
+						await replyTo(
+							msg,
+							`工作区切换失败：${err instanceof Error ? err.message : String(err)}`,
+						);
+					}
+					break;
+				case "support": {
+					await exportDiagnostics(msg);
+					break;
+				}
+				case "feishu-config":
+					await replyTo(
+						msg,
+						buildSimpleTextCard(
+							"配置：发送 /feishu-config <key>=<value> 热改（如 groupPolicy=mention）。",
+						),
+					);
+					break;
+			}
+			markDone(msg);
 			return;
 		}
-		if (verdict.kind === "unknown") {
-			await replyTo(msg, `未知命令 /${cmd.name}。输入 /help 查看可用命令。`);
+		// 2) pi 内置命令 → CommandAdapter（spec 2026-08-08-1400 §3.3）
+		if (isPiCommand(name)) {
+			const piAdapterDeps: PiCommandDeps = {
+				getHandle: (k) =>
+					conversations?.getHandle(k) ?? Promise.resolve(undefined),
+				listModels: () => conversations?.listModels() ?? Promise.resolve([]),
+				listSessions: () =>
+					conversations?.listSessions("all") ?? Promise.resolve([]),
+				newConversation: (k) =>
+					conversations?.newConversation(k) ?? Promise.resolve(),
+				switchSession: (k, p) =>
+					conversations?.switchSession(k, p) ?? Promise.resolve(),
+				setProviderApiKey: (provider, apiKey) =>
+					piBackend?.setProviderApiKey(provider, apiKey) ??
+					Promise.resolve(false),
+			};
+			const res = await runPiCommand(piAdapterDeps, {
+				key,
+				command: name,
+				args: cmd.args,
+				rawText,
+			});
+			if (res.kind === "handled") {
+				await replyTo(msg, buildSimpleTextCard(res.text));
+				markDone(msg);
+			} else {
+				// 适配器不处理（理论不会发生，防御）→ 原样转发
+				await handleConversationMessage(msg, rawText);
+			}
 			return;
 		}
-		if (verdict.kind === "scheduler") {
-			// 可选依赖（FR-11）：my-pi-scheduler 未安装 → 明确提示，不打扰模型。
+		// 3) scheduler（可选依赖，FR-11）
+		if (["loop", "remind", "schedule", "unschedule"].includes(name)) {
 			if (!detectSchedulerInstalled()) {
 				await replyTo(
 					msg,
@@ -325,79 +423,14 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 				);
 				return;
 			}
-			// Route to the model via the conversation (natural-language scheduler).
 			await handleConversationMessage(
 				msg,
 				`/${cmd.name} ${cmd.rawArgs}`.trim(),
 			);
 			return;
 		}
-		switch (verdict.name) {
-			case "help":
-				await replyTo(msg, buildHelpCard());
-				return;
-			case "status":
-				await replyTo(
-					msg,
-					buildStatusCard(formatStatusLine(), statusDetailLines()),
-				);
-				return;
-			case "new":
-				await conversations?.newConversation(key);
-				await replyTo(msg, "已创建新会话。旧会话历史已保留。");
-				return;
-			case "stop":
-				await conversations?.disposeActiveFor(key);
-				await replyTo(msg, "已停止当前任务。");
-				return;
-			case "model":
-				await replyTo(
-					msg,
-					buildSimpleTextCard(
-						"模型切换请发送 /model <模型ID>。可用模型由本机配置决定。",
-					),
-				);
-				return;
-			case "thinking":
-				await replyTo(
-					msg,
-					buildSimpleTextCard(
-						"思考等级切换请发送 /thinking <low|medium|high>。",
-					),
-				);
-				return;
-			case "workspace":
-				try {
-					const ws = await conversations?.switchWorkspace(key, cmd.args[0]);
-					await replyTo(msg, `当前工作区：${ws ?? "未切换"}`);
-				} catch (err) {
-					await replyTo(
-						msg,
-						`工作区切换失败：${err instanceof Error ? err.message : String(err)}`,
-					);
-				}
-				return;
-			case "compact":
-				await replyTo(
-					msg,
-					buildSimpleTextCard("上下文压缩：当前会话即将压缩。"),
-				);
-				return;
-			case "support": {
-				await exportDiagnostics(msg);
-				return;
-			}
-			case "feishu-config":
-				await replyTo(
-					msg,
-					buildSimpleTextCard(
-						"配置：发送 /feishu-config <key>=<value> 热改（如 groupPolicy=mention）。",
-					),
-				);
-				return;
-			default:
-				await replyTo(msg, `命令 /${verdict.name} 已收到。`);
-		}
+		// 4) 其他（插件命令/skill/模板/未知）→ 原样交 prompt（pi 原生执行，spec §3.2.1）
+		await handleConversationMessage(msg, rawText);
 	}
 
 	// ---------------- inbound pipeline ----------------
@@ -477,10 +510,49 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		);
 
 		const text = extractPlainTextForTrigger(msg.msgType, msg.content).trim();
+		// 2026-08-08（spec §3.2）：交互选择消费——/model /resume 列出选项后，
+		// 用户回复编号/名称即完成选择，不当作普通消息。
+		if (getPendingSelect(key)) {
+			const consumed = tryConsumeSelect(key, text);
+			if (consumed.consumed && consumed.text) {
+				const marker = consumed.text.split(":")[0];
+				const value = consumed.text.slice(consumed.text.indexOf(":") + 1);
+				if (marker === "__MODEL_SELECT__") {
+					const handle = await conversations?.getHandle(key);
+					if (handle) {
+						const ok = await handle.setModel(value);
+						await replyTo(
+							msg,
+							ok
+								? `✅ 模型已切换：${value}`
+								: `❌ 模型 ${value} 不可用（/model 查看列表）`,
+						);
+					}
+				} else if (marker === "__SESSION_SELECT__") {
+					await conversations?.switchSession(key, value);
+					await replyTo(msg, `✅ 已恢复会话：${value}`);
+				} else if (marker === "__API_KEY__") {
+					// 格式 __API_KEY__:<provider>:<key>
+					const colon = value.indexOf(":");
+					if (colon > 0) {
+						const provider = value.slice(0, colon);
+						const apiKey = value.slice(colon + 1);
+						const ok = await piBackend?.setProviderApiKey(provider, apiKey);
+						await replyTo(
+							msg,
+							ok
+								? `✅ ${provider} API key 已保存。发送 /model 查看可用模型。`
+								: `❌ ${provider} API key 保存失败。`,
+						);
+					}
+				}
+				return;
+			}
+		}
 		if (text.startsWith("/")) {
 			const cmd = parseCommand(text);
 			if (cmd) {
-				await handleCommand(msg, cmd);
+				await handleCommand(msg, cmd, text);
 				return;
 			}
 		}
@@ -559,6 +631,16 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		let streamCreated = false;
 
 		const onDelta = (delta: string): void => {
+			if (!streamCreated) {
+				// 2026-08-08 流式修复（spec §3.1 B1）：首次 delta 记录回复目标，
+				// 供 liveChannel.send 创建流式卡片时使用真实 messageId/chatId。
+				streamTargets.set(cardId, {
+					messageId:
+						route.threadMessageId ??
+						(route as { lastMessageId?: string }).lastMessageId,
+					chatId: route.chatId,
+				});
+			}
 			liveChannel?.patchDelta(cardId, delta);
 			streamCreated = true;
 		};
@@ -821,6 +903,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 				if (!transport) return;
 				const existing = streamCards.get(patch.cardId);
 				const text = (existing?.text ?? "") + (patch.delta ?? "");
+				const target = streamTargets.get(patch.cardId);
 				if (existing) {
 					await transport.updateCard(
 						existing.messageId,
@@ -829,7 +912,19 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					existing.text = text;
 					existing.touchedAt = Date.now();
 				} else {
-					const messageId = await transport.replyText(patch.cardId, text);
+					// 2026-08-08 修复（spec §3.1 B1/B2）：流式卡片从创建就用
+					// interactive 卡片——此前用 replyText/sendText 发 text 消息，
+					// 后续 updateCard patch 卡片报 230001 "This message is NOT a
+					// card"（400），导致回复停在流式半截 + 最终结果投递失败。
+					const messageId = target?.messageId
+						? await transport.replyCard(
+								target.messageId,
+								buildSimpleTextCard(text),
+							)
+						: await transport.sendCard(
+								target?.chatId ?? "",
+								buildSimpleTextCard(text),
+							);
 					if (messageId)
 						streamCards.set(patch.cardId, {
 							messageId,
@@ -857,9 +952,10 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		});
 		turnSupervisor.start();
 
+		piBackend = new PiSessionBackend();
 		conversations = new ConversationManager({
 			cwd: process.cwd(),
-			backend: new PiSessionBackend(),
+			backend: piBackend,
 			stateFile,
 			maxResident: cfg.sessions.maxResident,
 			idleDisposeMs: cfg.sessions.idleDisposeMs,
@@ -906,7 +1002,16 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 
 		compensation = new MissedMessageCompensation({
 			listChatMessages: (chatId, opts) => transport!.listMessages(chatId, opts),
-			knownChatIds: () => Object.keys(router.routesSnapshot()),
+			knownChatIds: () => [
+				// 2026-08-08 修复：必须用真实飞书 chat_id（oc_xxx），不能用
+				// conversationKey（p2p:ou_x / group:oc_x）——此前补偿调 list API
+				// 传 key 导致 400（feishu.compensation.list_failed）。
+				...new Set(
+					Object.values(router.routesSnapshot())
+						.map((r) => r.chatId)
+						.filter((id): id is string => Boolean(id)),
+				),
+			],
 			admitMessage: (id) => dedupe.admit(id),
 			// C2: backfilled messages must skip the dedupe re-check (already admitted).
 			onMessage: (m, opts) => handleInbound(m, opts),
@@ -1245,6 +1350,20 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			setConnectionStatus("飞书桥未配置 → 运行 /feishu setup");
 			return;
 		}
+		// 卸载残留兜底（2026-08-08）：配置仍在但扩展已从 settings 卸载/入口被删时，
+		// 立即清理状态目录，避免「卸载了还自动启动」（daemon 自监控只在 15s 内兜底，
+		// 这里让 TUI 会话启动即干净）。清理后按未配置处理。
+		if (
+			cleanupStateDirIfUninstalled({
+				entryPath: extensionEntryPath(),
+				stateDir: rootDir(),
+			})
+		) {
+			setConnectionStatus(
+				"检测到扩展已卸载，飞书配置已清理（需要时重新运行 /feishu setup）",
+			);
+			return;
+		}
 		const isDaemon = process.env[DAEMON_ENV] === "1";
 		if (isDaemon) {
 			// Daemon child: own the gateway and run the bridge headless.
@@ -1258,6 +1377,17 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					onExit: async () => {
 						logger.info("feishu.daemon.uninstalled");
 						await stopBridge().catch(() => undefined);
+						// 卸载卫生（2026-08-08）：释放连接后清理整个状态目录
+						// （config.json 含 appSecret / outbox / 日志 / 锁文件），否则残留
+						// 配置会让下次加载自动拉起 daemon——卸载必须真正干净。
+						if (
+							cleanupStateDirIfUninstalled({
+								entryPath: extensionEntryPath(),
+								stateDir: rootDir(),
+							})
+						) {
+							logger.info("feishu.state.cleaned");
+						}
 					},
 				});
 			} catch (err) {

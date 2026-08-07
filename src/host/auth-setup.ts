@@ -24,12 +24,14 @@ export interface SetupAddons {
 
 /** 桥接必需的事件订阅：im.message.receive_v1（消息到达） */
 export const REQUIRED_EVENT = "im.message.receive_v1";
-/** 桥接依赖的权限范围 */
+/** 桥接依赖的权限范围（2026-08-08 扩充：群聊全量消息 + 表情回执） */
 export const SETUP_SCOPES: readonly string[] = [
 	"im:message",
 	"im:message.send_as_bot",
 	"im:chat",
 	"im:resource",
+	"im:message.group_msg", // 群聊所有消息（不@也推，用户指令 2026-08-08）
+	"im:message.reactions:write_only", // DONE 表情回执（命令/任务完成标记）
 ] as const;
 
 /** 构建 registerApp 的 addons（纯函数，可单测）。 */

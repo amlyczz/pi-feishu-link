@@ -1,7 +1,7 @@
 {
   "name": "pi-feishu-link",
-  "version": "0.1.1",
-  "description": "High-reliability Feishu/Lark bridge for Pi — zero-config onboarding, persistent outbox (at-least-once), connection watchdog, permission bridge, diagnostics (npm 发布名：pi-feishu-link，npm 上 pi-feishu-link 已被他人占用)",
+  "version": "0.2.0",
+  "description": "High-reliability Feishu/Lark bridge for Pi — zero-config onboarding, persistent outbox (at-least-once), streaming output, native pi command adapter, permission bridge, one-click diagnostics",
   "type": "module",
   "license": "MIT",
   "keywords": [
@@ -24,15 +24,19 @@
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/qrcode-terminal": "^0.12.2",
+    "sharp": "^0.35.3",
     "typescript": "^5.9.2"
   },
   "pi": {
     "extensions": [
       "./src/index.ts"
-    ]
+    ],
+    "image": "assets/preview.png"
   },
   "files": [
     "src",
+    "assets",
+    "scripts",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

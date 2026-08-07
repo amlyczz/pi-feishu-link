@@ -69,6 +69,50 @@ test("normalizeInbound returns undefined without message_id", () => {
 	assert.equal(normalizeInbound(null), undefined);
 });
 
+test("normalizeInbound parses v2.0 nested structure (event.message)", () => {
+	// 飞书 v2.0 事件：字段嵌套在 event.message / event.sender 下
+	const msg = normalizeInbound({
+		sender: {
+			sender_type: "user",
+			sender_id: { open_id: "ou_v2" },
+		},
+		message: {
+			message_id: "om_v2",
+			chat_id: "oc_v2",
+			chat_type: "p2p",
+			message_type: "text",
+			content: JSON.stringify({ text: "你好" }),
+			create_time: "1700000000000",
+		},
+	});
+	assert.ok(msg, "v2.0 嵌套结构应能解析");
+	assert.equal(msg.messageId, "om_v2");
+	assert.equal(msg.chatId, "oc_v2");
+	assert.equal(msg.chatType, "p2p");
+	assert.equal(msg.senderOpenId, "ou_v2");
+	assert.equal(msg.senderType, "user");
+	assert.equal(msg.msgType, "text");
+	assert.equal(msg.content, JSON.stringify({ text: "你好" }));
+});
+
+test("normalizeInbound tolerates data.event wrapper (SDK dispatcher shape)", () => {
+	// SDK EventDispatcher 传给 handler 的可能是 { event: {...} } 包装
+	const msg = normalizeInbound({
+		event: {
+			sender: { sender_type: "user", sender_id: { open_id: "ou_w" } },
+			message: {
+				message_id: "om_w",
+				chat_id: "oc_w",
+				chat_type: "p2p",
+				message_type: "text",
+				content: "{}",
+			},
+		},
+	});
+	assert.ok(msg, "{ event: {...} } 包装应能解析");
+	assert.equal(msg.messageId, "om_w");
+});
+
 // ---- fake SDK + transport ----
 
 interface FakeRecord {

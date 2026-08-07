@@ -23,6 +23,35 @@ export interface PiSessionHandle {
 	getLastAssistantText(): string;
 	getModelLabel(): string;
 	dispose(): Promise<void>;
+	// ---- 2026-08-08 命令适配（spec 2026-08-08-1400 §3.3）：pi 原生能力透传 ----
+	/** 切换模型；返回是否成功（模型未配置/无凭据返回 false）。 */
+	setModel(modelId: string): Promise<boolean>;
+	/** 循环切换模型；返回新模型 id（无可切换时 undefined）。 */
+	cycleModel(): Promise<string | undefined>;
+	/** 设置思考等级（off/minimal/low/medium/high/xhigh/max）。 */
+	setThinkingLevel(level: string): Promise<void>;
+	getThinkingLevel(): string;
+	getAvailableThinkingLevels(): string[];
+	/** 手动压缩；返回结果摘要文本。 */
+	compact(instructions?: string): Promise<string>;
+	setSessionName(name: string): Promise<void>;
+	getSessionSummary(): {
+		modelId: string;
+		messageCount: number;
+		name?: string;
+	};
+	/** 执行 bash（!!! 排除上下文 / ! 入上下文）。 */
+	executeBash(
+		command: string,
+		onChunk?: (chunk: string) => void,
+	): Promise<string>;
+}
+
+export interface ModelInfo {
+	provider: string;
+	id: string;
+	contextWindow: number;
+	reasoning: boolean;
 }
 
 export interface SessionListItem {
@@ -41,6 +70,8 @@ export interface SessionBackend {
 		sessionFile?: string;
 	}): Promise<PiSessionHandle>;
 	listSessions(cwd?: string): Promise<SessionListItem[]>;
+	/** 2026-08-08：全局可用模型列表（ModelRegistry）。 */
+	listModels(): Promise<ModelInfo[]>;
 }
 
 export interface ConversationManagerOptions {
@@ -307,6 +338,32 @@ export class ConversationManager {
 	async listSessions(scope: "workspace" | "all"): Promise<SessionListItem[]> {
 		const cwd = scope === "workspace" ? this.cwd : undefined;
 		return this.backend.listSessions(cwd);
+	}
+
+	/** 2026-08-08（spec §3.3）：获取会话 handle（命令适配用，惰性创建）。 */
+	async getHandle(key: ConversationKey): Promise<PiSessionHandle | undefined> {
+		const entry = this.touch(key);
+		await this.ensureSession(entry);
+		return entry.handle;
+	}
+
+	/** 2026-08-08（spec §3.3）：切换到指定会话文件（/resume）。 */
+	async switchSession(
+		key: ConversationKey,
+		sessionPath: string,
+	): Promise<void> {
+		const entry = this.touch(key);
+		if (entry.handle) {
+			await entry.handle.dispose();
+			entry.handle = undefined;
+		}
+		this.state.sessions[key] = sessionPath;
+		this.persist();
+	}
+
+	/** 2026-08-08（spec §3.3）：全局可用模型列表（ModelRegistry）。 */
+	async listModels(): Promise<ModelInfo[]> {
+		return this.backend.listModels();
 	}
 
 	/** Session dir derived from key + workspace (isolation, spec §6.6). */

@@ -230,6 +230,44 @@ export interface UninstallWatchOptions {
 }
 
 /**
+ * Recursively remove the bridge state directory (config.json, outbox, logs,
+ * gateway lock, status). Best-effort: never throws. Uninstall hygiene —
+ * `pi remove` never runs extension code, so a detached daemon is the only
+ * process that can clean up after itself.
+ */
+export function cleanupStateDir(stateDir: string): void {
+	try {
+		rmSync(stateDir, { recursive: true, force: true });
+	} catch {
+		/* best-effort */
+	}
+}
+
+/**
+ * Remove the state directory ONLY when the extension is genuinely uninstalled
+ * (entry deleted, or absent from every existing settings file). Returns true
+ * when the state dir was removed. Guarded — never runs while the extension is
+ * still registered, so a transient git operation or malformed settings can't
+ * nuke the user's config.
+ */
+export function cleanupStateDirIfUninstalled(opts: {
+	entryPath: string;
+	stateDir: string;
+	settingsFiles?: string[];
+}): boolean {
+	if (
+		checkUninstallCondition(
+			opts.entryPath,
+			opts.settingsFiles ?? defaultSettingsFiles(),
+		)
+	) {
+		return false;
+	}
+	cleanupStateDir(opts.stateDir);
+	return true;
+}
+
+/**
  * Periodically check whether the extension is still installed; when not,
  * call onExit (e.g. release the gateway lock) and terminate the process.
  * Returns a stop() handle for tests / teardown.

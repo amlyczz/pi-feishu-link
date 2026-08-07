@@ -1,11 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	buildDaemonCommand,
 	checkUninstallCondition,
+	cleanupStateDir,
+	cleanupStateDirIfUninstalled,
 	extensionStillRegistered,
 	shellQuote,
 	spawnDaemon,
@@ -327,6 +335,74 @@ test("checkUninstallCondition: 入口文件被删 → 退出；无设置文件 �
 		assert.equal(checkUninstallCondition(entry, []), true);
 		assert.equal(
 			checkUninstallCondition(entry, [join(dir, "no-such-settings.json")]),
+			true,
+		);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("cleanupStateDir: 递归删除状态目录且幂等", () => {
+	const dir = mkdtempSync(join(tmpdir(), "fb-clean-"));
+	try {
+		const stateDir = join(dir, "state");
+		mkdirSync(join(stateDir, "outbox"), { recursive: true });
+		writeFileSync(join(stateDir, "config.json"), "{}");
+		writeFileSync(join(stateDir, "outbox", "m1.json"), "{}");
+		cleanupStateDir(stateDir);
+		assert.equal(existsSync(stateDir), false, "整个状态目录被删除");
+		// 幂等：目录不存在时再次清理不抛错
+		cleanupStateDir(stateDir);
+		assert.equal(existsSync(stateDir), false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("cleanupStateDirIfUninstalled: 仍注册 → 不清理；已卸载 → 清理且幂等", () => {
+	const dir = mkdtempSync(join(tmpdir(), "fb-cu-"));
+	try {
+		const entry = join(dir, "ext", "index.ts");
+		mkdirSync(dirname(entry), { recursive: true });
+		writeFileSync(entry, "", "utf8");
+		const stateDir = join(dir, "state");
+		const settings = join(dir, "settings.json");
+		mkdirSync(stateDir, { recursive: true });
+		writeFileSync(join(stateDir, "config.json"), "{}");
+
+		// settings 仍注册本扩展 → 不清理（防误删：git 操作/临时抖动不得删配置）
+		writeFileSync(settings, JSON.stringify({ packages: ["./ext"] }));
+		assert.equal(
+			cleanupStateDirIfUninstalled({
+				entryPath: entry,
+				stateDir,
+				settingsFiles: [settings],
+			}),
+			false,
+			"仍注册 → 返回 false",
+		);
+		assert.equal(existsSync(join(stateDir, "config.json")), true, "配置保留");
+
+		// 注册被移除 → 判定已卸载 → 清理
+		writeFileSync(settings, JSON.stringify({ packages: [] }));
+		assert.equal(
+			cleanupStateDirIfUninstalled({
+				entryPath: entry,
+				stateDir,
+				settingsFiles: [settings],
+			}),
+			true,
+			"已卸载 → 返回 true",
+		);
+		assert.equal(existsSync(stateDir), false, "状态目录被清理");
+
+		// 状态目录已不存在 → 幂等返回 true
+		assert.equal(
+			cleanupStateDirIfUninstalled({
+				entryPath: entry,
+				stateDir,
+				settingsFiles: [settings],
+			}),
 			true,
 		);
 	} finally {

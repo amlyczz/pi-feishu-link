@@ -43,6 +43,29 @@ class EchoHandle implements PiSessionHandle {
 	getModelLabel(): string {
 		return "fake";
 	}
+	async setModel(_modelId: string): Promise<boolean> {
+		return true;
+	}
+	async cycleModel(): Promise<string | undefined> {
+		return undefined;
+	}
+	async setThinkingLevel(): Promise<void> {}
+	getThinkingLevel(): string {
+		return "off";
+	}
+	getAvailableThinkingLevels(): string[] {
+		return ["off"];
+	}
+	async compact(): Promise<string> {
+		return "compacted";
+	}
+	async setSessionName(): Promise<void> {}
+	getSessionSummary() {
+		return { modelId: "fake", messageCount: 0 };
+	}
+	async executeBash(): Promise<string> {
+		return "";
+	}
 	async dispose(): Promise<void> {}
 }
 
@@ -64,6 +87,16 @@ class EchoBackend implements SessionBackend {
 	}
 	async listSessions(): Promise<never[]> {
 		return [];
+	}
+	async listModels() {
+		return [
+			{
+				provider: "fake",
+				id: "fake-model",
+				contextWindow: 0,
+				reasoning: false,
+			},
+		];
 	}
 }
 

@@ -134,6 +134,18 @@ test("buildSetupAddons: 事件订阅包含 im.message.receive_v1 + 卡片回调 
 	assert.deepEqual(keys.sort(), ["callbacks", "events", "scopes"]);
 });
 
+test("buildSetupAddons: 权限含群聊所有消息 + 表情回执（2026-08-08 用户指令）", () => {
+	const addons = buildSetupAddons();
+	assert.ok(
+		addons.scopes?.tenant?.includes("im:message.group_msg"),
+		"群聊不@也推消息：需要 im:message.group_msg",
+	);
+	assert.ok(
+		addons.scopes?.tenant?.includes("im:message.reactions:write_only"),
+		"命令完成打 DONE 表情：需要 im:message.reactions:write_only",
+	);
+});
+
 test("checkEventSubscription: 已订阅 → ok", async () => {
 	const res = await checkEventSubscription("cli_x", "s", {
 		fetch: (async (url: string) => {
@@ -143,7 +155,16 @@ test("checkEventSubscription: 已订阅 → ok", async () => {
 			return new Response(
 				JSON.stringify({
 					code: 0,
-					data: { app: { callback_info: { subscribed_callbacks: ["card.action.trigger", "im.message.receive_v1"] } } },
+					data: {
+						app: {
+							callback_info: {
+								subscribed_callbacks: [
+									"card.action.trigger",
+									"im.message.receive_v1",
+								],
+							},
+						},
+					},
 				}),
 			);
 		}) as typeof fetch,
@@ -161,7 +182,11 @@ test("checkEventSubscription: 未订阅 receive_v1 → 报缺失（当前 bug �
 			return new Response(
 				JSON.stringify({
 					code: 0,
-					data: { app: { callback_info: { subscribed_callbacks: ["card.action.trigger"] } } },
+					data: {
+						app: {
+							callback_info: { subscribed_callbacks: ["card.action.trigger"] },
+						},
+					},
 				}),
 			);
 		}) as typeof fetch,
