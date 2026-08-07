@@ -762,6 +762,10 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			throw new Error("未配置。运行 /feishu setup 扫码 30 秒搞定。");
 		}
 		if (started) return "already";
+		// 守卫立即生效（2026-08-07 修复）：此前 started=true 设在 startBridge 结尾，
+		// rpc 模式下 session_start 并发触发时多个 startBridge 会同时穿过守卫，各自创建
+		// transport + WS 连接 → 连接配额打爆 → 后续连接全部 exceed_conn_limit。
+		started = true;
 		const lock = acquireGatewayLock(rootDir(), { takeover: opts.takeover });
 		if (lock.status === "busy") {
 			return `连接由其他进程持有（pid ${lock.owner?.pid}）。运行 /feishu takeover 接管。`;
@@ -926,7 +930,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			},
 		});
 
-		started = true;
 		await supervisor.start();
 		statusStore.update({
 			residentSessions: 0,
