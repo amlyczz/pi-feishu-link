@@ -960,6 +960,19 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			maxResident: cfg.sessions.maxResident,
 			idleDisposeMs: cfg.sessions.idleDisposeMs,
 			turnSupervisor,
+			// 2026-08-08：会话持续订阅——pi-goal 等扩展的自动执行回合（无用户
+			// 消息触发）中间输出也流式显示到飞书（通用机制，不识别任何命令）。
+			onSessionDelta: (key, delta) => {
+				const cardId = `sess:${key}`;
+				if (!streamTargets.has(cardId)) {
+					const route = router.getRoute(key);
+					streamTargets.set(cardId, {
+						messageId: route?.threadMessageId ?? route?.lastMessageId,
+						chatId: route?.chatId ?? "",
+					});
+				}
+				liveChannel?.patchDelta(cardId, delta);
+			},
 		});
 
 		bridgeRuntime = new BridgeRuntime({

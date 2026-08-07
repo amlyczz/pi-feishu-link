@@ -43,9 +43,6 @@ test("未传池时使用默认池", () => {
 });
 
 test("DEFAULT_CONFIG 接线：doneEmoji=DONE 且 emojis 池排除 DONE", async () => {
-	const { loadConfig } = await import("../../../src/common/config.ts");
-	const cfg = loadConfig();
-	// 无配置时 loadConfig 返回 undefined；直接断言 DEFAULT_CONFIG 形状
 	const { DEFAULT_CONFIG } = await import("../../../src/common/config.ts");
 	const r = DEFAULT_CONFIG.forward.reactions;
 	assert.equal(r.doneEmoji, "DONE");

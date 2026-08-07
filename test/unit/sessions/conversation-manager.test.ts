@@ -15,14 +15,38 @@ class FakeHandle implements PiSessionHandle {
 	sessionId = `sid-${Math.random().toString(36).slice(2)}`;
 	lastPrompt = "";
 	sessionFile: string;
+	/** 2026-08-08 持续订阅测试：保存 subscribe 回调。 */
+	subscriber: ((e: unknown) => void) | undefined;
+	/** 2026-08-08：holdPrompt=true 时 prompt 挂起直到 releasePrompt。 */
+	holdPrompt = false;
+	private promptResolve: (() => void) | undefined;
 	constructor(sessionFile: string) {
 		this.sessionFile = sessionFile;
 	}
 	async prompt(text: string): Promise<void> {
 		this.lastPrompt = text;
+		if (this.holdPrompt) {
+			await new Promise<void>((r) => {
+				this.promptResolve = r;
+			});
+		}
 	}
-	subscribe(_fn: (e: unknown) => void): () => void {
-		return () => {};
+	releasePrompt(): void {
+		this.promptResolve?.();
+		this.promptResolve = undefined;
+	}
+	subscribe(fn: (e: unknown) => void): () => void {
+		this.subscriber = fn;
+		return () => {
+			this.subscriber = undefined;
+		};
+	}
+	/** 模拟会话事件（text_delta）。 */
+	emitDelta(delta: string): void {
+		this.subscriber?.({
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", delta },
+		});
 	}
 	getLastAssistantText(): string {
 		return `answer:${this.lastPrompt}`;
@@ -380,6 +404,41 @@ test("queued message triggers queueWarn tracking while a turn is active", async 
 		await p1;
 		await p2;
 		assert.ok(!ts.isTurnActive("k"));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("持续订阅：自动回合（busy=false）delta 转发；用户回合（busy=true）不重复（2026-08-08）", async () => {
+	dir = mkdtempSync(join(tmpdir(), "fb-cm-live-"));
+	const stateFile = join(dir, "state.json");
+	created.length = 0;
+	disposed.length = 0;
+	handles.clear();
+	const deltas: Array<{ key: string; delta: string }> = [];
+	const mgr = new ConversationManager({
+		cwd: "/work/default",
+		backend: new FakeBackend(),
+		stateFile,
+		maxResident: 4,
+		onSessionDelta: (key, delta) => deltas.push({ key, delta }),
+	});
+	try {
+		const handle = (await mgr.getHandle("k1")) as FakeHandle;
+		assert.ok(handle.subscriber, "会话创建后应挂持续订阅");
+		// 空闲（busy=false）→ 自动回合 delta 转发
+		handle.emitDelta("中间输出A");
+		assert.equal(deltas.length, 1);
+		assert.equal(deltas[0]?.delta, "中间输出A");
+		assert.equal(deltas[0]?.key, "k1");
+		// 用户回合（prompt 中 busy=true）→ 持续订阅跳过（由 per-turn onDelta 处理）
+		handle.holdPrompt = true;
+		const p = mgr.prompt("k1", "用户消息", { turnTimeoutMs: 5000, ackAfterMs: 0 });
+		await new Promise((r) => setTimeout(r, 20));
+		handle.emitDelta("回合中delta");
+		assert.equal(deltas.length, 1, "busy 时不重复转发");
+		handle.releasePrompt();
+		await p;
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

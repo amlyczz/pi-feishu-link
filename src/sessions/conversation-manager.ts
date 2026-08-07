@@ -81,6 +81,11 @@ export interface ConversationManagerOptions {
 	maxResident?: number;
 	idleDisposeMs?: number;
 	turnSupervisor?: TurnSupervisor;
+	/**
+	 * 2026-08-08：会话持续订阅的模型文本 delta（pi-goal 等扩展的自动执行
+	 * 回合——无用户消息触发——输出也能流式显示）。通用机制，不识别任何命令。
+	 */
+	onSessionDelta?: (key: ConversationKey, delta: string) => void;
 	now?: () => number;
 }
 
@@ -95,6 +100,8 @@ interface Entry {
 	handle?: PiSessionHandle;
 	lastUsedAt: number;
 	busy: boolean;
+	/** 2026-08-08：是否已挂持续订阅（会话生命周期内一次性）。 */
+	liveSubscribed?: boolean;
 }
 
 export class ConversationManager {
@@ -104,6 +111,7 @@ export class ConversationManager {
 	private readonly maxResident: number;
 	private readonly idleDisposeMs: number;
 	private readonly turnSupervisor?: TurnSupervisor;
+	private readonly onSessionDelta?: (key: ConversationKey, delta: string) => void;
 	private readonly now: () => number;
 	private readonly entries = new Map<ConversationKey, Entry>();
 	private readonly queues = new Map<ConversationKey, Promise<unknown>>();
@@ -118,6 +126,7 @@ export class ConversationManager {
 		this.maxResident = options.maxResident ?? 8;
 		this.idleDisposeMs = options.idleDisposeMs ?? 1_800_000;
 		this.turnSupervisor = options.turnSupervisor;
+		this.onSessionDelta = options.onSessionDelta;
 		this.now = options.now ?? Date.now;
 		this.state = readJson<ConversationState>(this.stateFile, {
 			sessions: {},
@@ -401,6 +410,17 @@ export class ConversationManager {
 				sessionFile && existsSync(sessionFile) ? sessionFile : undefined,
 		});
 		entry.handle = handle;
+		// 2026-08-08：会话创建即挂持续订阅（一次）。pi-goal 等扩展的自动执行
+		// 回合（entry.busy=false，无用户消息触发）输出也流式转发——中间输出
+		// 全程可见；用户回合（busy=true）仍由 prompt 内 onDelta 处理，不重复。
+		if (this.onSessionDelta && !entry.liveSubscribed) {
+			entry.liveSubscribed = true;
+			handle.subscribe((event: unknown) => {
+				if (entry.busy) return; // 用户回合由 per-turn onDelta 处理
+				const delta = extractTextDelta(event);
+				if (delta) this.onSessionDelta?.(key, delta);
+			});
+		}
 		this.sessionKeys.set(handle.sessionId, key);
 		this.state.sessions[key] = handle.sessionFile;
 		this.persist();

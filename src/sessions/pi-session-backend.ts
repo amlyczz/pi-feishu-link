@@ -65,7 +65,14 @@ export class PiSessionBackend implements SessionBackend {
 			sessionId: session.sessionId,
 			sessionFile: session.sessionFile ?? "",
 			async prompt(text, images) {
-				await session.prompt(text, images?.length ? { images } : undefined);
+				// 2026-08-08 修复：streaming 中调用必须传 streamingBehavior，否则
+				// SDK 抛 "Agent is already processing"（群聊 open 策略下用户连发
+				// 消息/FIFO 放行时上一回合 streaming 未结束）。followUp = 排队到
+				// 当前回合结束后再处理，与桥的 FIFO 语义一致。
+				await session.prompt(text, {
+					...(images?.length ? { images } : {}),
+					streamingBehavior: "followUp",
+				});
 			},
 			subscribe(fn) {
 				return session.subscribe(fn);
