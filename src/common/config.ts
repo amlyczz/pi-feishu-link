@@ -13,6 +13,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { DONE_EMOJI, REACTION_POOL } from "./reactions.js";
 import type { FeishuConfig } from "./types.js";
 
 const SCHEMA_VERSION = 1;
@@ -55,7 +56,11 @@ export const DEFAULT_CONFIG: FeishuConfig = {
 		toolCalls: { mode: "summary" },
 		reasoning: { mode: "off" },
 		progress: { enabled: true },
-		reactions: { enabled: true, emoji: "DONE" },
+		reactions: {
+			enabled: true,
+			emojis: [...REACTION_POOL],
+			doneEmoji: DONE_EMOJI,
+		},
 	},
 	connection: {
 		probeIntervalMs: 30_000,

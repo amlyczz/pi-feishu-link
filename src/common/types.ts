@@ -12,7 +12,13 @@ export interface ForwardConfig {
 	toolCalls: { mode: "off" | "summary" | "detail" };
 	reasoning: { mode: "off" | "card" };
 	progress: { enabled: boolean };
-	reactions: { enabled: boolean; emoji: string };
+	reactions: {
+		enabled: boolean;
+		/** 入站随机表情池（排除 DONE，可覆盖） */
+		emojis: string[];
+		/** 任务完成时对触发消息打的表情（默认 DONE） */
+		doneEmoji: string;
+	};
 }
 
 export interface ConnectionConfig {

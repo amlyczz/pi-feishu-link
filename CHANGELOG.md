@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.2 (2026-08-07)
+
+### 表情回执策略（用户指令，2026-08-07）
+
+- **入站随机表情**：收到用户消息后从随机池取一枚表情打回执（"已收到"即时反馈）
+- **DONE 专属任务完成**：DONE 表情只在回合/任务完成时对触发消息打出；**DONE 永不参与随机池**
+- 配置：`forward.reactions = { enabled, emojis: string[], doneEmoji: string }`
+  - `emojis` 默认 11 枚飞书 emoji_type（THUMBSUP/OK/HEART/LAUGH/SMILE/WOW/CLAP/FIRE/AMAZE/AWESOME/COOL），可热改
+  - `doneEmoji` 默认 `DONE`（✅），旧配置 `emoji` 字段兼容（忽略，行为按新策略）
+- 两处均为 best-effort（失败静默，不阻塞回复投递）
+
+### 僵尸 daemon 修复（用户报告，2026-08-07）
+
+- `/feishu takeover` / `stop` / `restart` 现在 **SIGTERM → 1.2s 后 SIGKILL** 逐级升级，确保忽略 SIGTERM 的挂死 daemon 被强制清理，避免双 WS 连接互踢（"发消息没动静"的常见根源）
+- 新增 `killGatewayOwner`（升级式终止 + 清锁），`spawnDaemon` takeover 分支复用
+
+**测试**：200 → **201 项全绿**（新增表情策略 7 项 + SIGKILL 升级 1 项；修复 macOS `/var`→`/private/var` 符号链接导致的 switchWorkspace 测试断言）。
+
 ## 0.1.1 (2026-08-07)
 
 ### 权限模型变更 v1.3（用户指令，2026-08-07）

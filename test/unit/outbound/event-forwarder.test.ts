@@ -9,7 +9,7 @@ const DEFAULT_FORWARD: ForwardConfig = {
   toolCalls: { mode: "summary" },
   reasoning: { mode: "off" },
   progress: { enabled: true },
-  reactions: { enabled: true, emoji: "DONE" },
+  reactions: { enabled: true, emojis: ["THUMBSUP"], doneEmoji: "DONE" },
 };
 
 function makeForwarder(forward: Partial<ForwardConfig> = {}) {

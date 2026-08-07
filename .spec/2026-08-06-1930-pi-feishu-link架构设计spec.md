@@ -322,7 +322,8 @@ class ConnectionSupervisor {
 dedupe-store（SQLite/JSONL，message_id，7d TTL）
   → sender_type=bot 过滤
   → 群策略判定（group-trigger 纯函数：open/mention/keywords/alsoOnReply）
-  → 表情回执（reactEmoji 可配，"已收到"的即时反馈）
+  → 随机表情回执（reactions.emojis 随机池取一枚，池内排除 DONE；"已收到"的即时反馈）
+  → 回合完成 → 对触发消息打 DONE 表情（任务完成标记，DONE 不参与随机池，见 §6.4）
   → "/" 前缀 → CommandController
   → AttachmentPipeline：
       image → 下载 → prompt images（非视觉模型显式拒绝并提示 /model）
@@ -429,8 +430,16 @@ type ForwardConfig = {
   toolCalls: { mode: "off" | "summary" | "detail" };  // summary=任务卡里一行"⚙ Bash: ls"；detail=独立消息
   reasoning: { mode: "off" | "card" };             // thinking delta
   progress: { enabled: boolean };                  // 任务状态卡（运行中/完成/失败 + /stop 按钮）
-  reactions: { enabled: boolean; emoji: "DONE" };  // 入站表情回执
+  reactions: {
+    enabled: boolean;
+    emojis: string[];     // 入站随机表情池（排除 DONE，用户可覆盖）
+    doneEmoji: string;    // 任务完成时对触发消息打的表情，默认 DONE
+  };  // 表情回执：入站随机 + 完成时 DONE
 };
+
+> 表情策略（用户指令 2026-08-07）：收到用户消息先随机回一枚表情（"已收到"即时反馈），
+> **随机池永不包含 DONE**；当该回合任务完成（`conversations.prompt` 成功返回最终回复）时，
+> 对触发这条任务的消息补打 `doneEmoji`（默认 ✅/DONE）。两者均为 best-effort，失败静默忽略。
 ```
 
 - 默认：`aiReply:card + streaming:on + toolCalls:summary + progress:on + reasoning:off`

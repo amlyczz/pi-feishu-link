@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConversationManager } from "../../../src/sessions/conversation-manager.ts";
@@ -146,8 +146,8 @@ test("newConversation disposes old and starts fresh", async () => {
 test("switchWorkspace disposes and binds new cwd; session files isolated", async () => {
 	const mgr = freshManager();
 	try {
-		const ws1 = mkdtempSync(join(tmpdir(), "fb-ws1-"));
-		const ws2 = mkdtempSync(join(tmpdir(), "fb-ws2-"));
+		const ws1 = realpathSync(mkdtempSync(join(tmpdir(), "fb-ws1-")));
+		const ws2 = realpathSync(mkdtempSync(join(tmpdir(), "fb-ws2-")));
 		await mgr.prompt("k", "a", { turnTimeoutMs: 1000, ackAfterMs: 0 });
 		const file1 = await mgr.getSessionFile("k");
 		await mgr.switchWorkspace("k", ws2);

@@ -69,10 +69,9 @@ export async function spawnDaemon(opts: DaemonOptions, takeover = false): Promis
     return { status: "busy", owner };
   }
   if (owner && owner.pid !== process.pid && takeover) {
-    try { process.kill(owner.pid, "SIGTERM"); } catch { /* already dead */ }
-    await sleep(500);
-    // Remove the now-stale lock file so the daemon can acquire cleanly.
-    try { rmSync(join(opts.lockDir, "gateway.json"), { force: true }); } catch { /* ignore */ }
+    // Escalating kill (SIGTERM → SIGKILL) so a hung daemon can't keep the
+    // gateway WS and fight the new owner; lock removed by killGatewayOwner.
+    await killGatewayOwner(opts.lockDir);
   }
   // Re-check after the takeover kill.
   owner = readGatewayOwner(opts.lockDir);
@@ -115,17 +114,54 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Terminate the gateway owner, escalating SIGTERM → SIGKILL for unresponsive
+ * (zombie/hung) daemons, then remove the lock file. Returns true when a live
+ * owner was signaled. No-op when the caller itself owns the gateway.
+ */
+export async function killGatewayOwner(
+	lockDir: string,
+	opts: { sigkillAfterMs?: number } = {},
+): Promise<boolean> {
+	const owner = readGatewayOwner(lockDir);
+	if (!owner) return false;
+	if (owner.pid === process.pid) return false; // we are the owner; handled elsewhere
+	const escalateAfter = opts.sigkillAfterMs ?? 1200;
+	try {
+		process.kill(owner.pid, "SIGTERM");
+	} catch {
+		/* already dead */
+	}
+	const deadline = Date.now() + escalateAfter;
+	let alive = true;
+	while (Date.now() < deadline) {
+		await sleep(120);
+		if (!isPidAlive(owner.pid)) {
+			alive = false;
+			break;
+		}
+	}
+	if (alive) {
+		// SIGTERM ignored — force-kill so the new owner's WS connection is
+		// not fought over by a hung daemon (user report 2026-08-07).
+		try {
+			process.kill(owner.pid, "SIGKILL");
+		} catch {
+			/* ignore */
+		}
+		await sleep(150);
+	}
+	try {
+		rmSync(join(lockDir, "gateway.json"), { force: true });
+	} catch {
+		/* ignore */
+	}
+	return true;
+}
+
 /** Signal the current gateway owner to stop (returns true if it was us/killed). */
 export async function stopDaemon(lockDir: string): Promise<boolean> {
-  const owner = readGatewayOwner(lockDir);
-  if (!owner) return false;
-  if (owner.pid === process.pid) return false; // we are the owner; handled elsewhere
-  try {
-    process.kill(owner.pid, "SIGTERM");
-    return true;
-  } catch {
-    return false;
-  }
+	return killGatewayOwner(lockDir);
 }
 
 function sleep(ms: number): Promise<void> {

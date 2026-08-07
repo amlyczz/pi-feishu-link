@@ -27,6 +27,7 @@ import {
 	saveOverrides,
 } from "./common/config.js";
 import { Logger } from "./common/logger.js";
+import { pickRandomReaction } from "./common/reactions.js";
 import { StatusStore } from "./common/status.js";
 import { DedupeStore } from "./common/dedupe-store.js";
 import { OutboundRouter } from "./outbound/outbound-router.js";
@@ -413,7 +414,12 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		}
 
 		if (cfg.forward.reactions.enabled) {
-			void transport?.addReaction(msg.messageId, cfg.forward.reactions.emoji);
+			// 入站随机表情回执（用户指令 2026-08-07）：随机池排除 DONE，
+			// DONE 只由回合完成时在 handleConversationMessage 打出。
+			void transport?.addReaction(
+				msg.messageId,
+				pickRandomReaction(cfg.forward.reactions.emojis),
+			);
 		}
 
 		router.bindConversation(
@@ -530,6 +536,14 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 				images: images.length ? images : undefined,
 			});
 			ctx.sessionId = conversations?.peekSessionId(key) ?? ctx.sessionId;
+			// 任务完成（用户指令 2026-08-07）：对触发消息打 DONE 表情，
+			// best-effort（失败静默忽略，不阻塞回复投递）。
+			if (cfg?.forward.reactions.enabled) {
+				void transport?.addReaction(
+					msg.messageId,
+					cfg.forward.reactions.doneEmoji || "DONE",
+				);
+			}
 			// I10: settle the volatile live channel BEFORE the durable final is
 			// enqueued — a pending stream patch must not clobber the finalized card.
 			if (streamCreated) {

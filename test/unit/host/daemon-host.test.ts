@@ -116,3 +116,28 @@ test("stopDaemon returns false when nobody owns the gateway", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("stopDaemon escalates to SIGKILL when the owner ignores SIGTERM", async () => {
+  const dir = tempDir();
+  try {
+    const { spawn } = await import("node:child_process");
+    // A child that explicitly ignores SIGTERM — proves the SIGKILL fallback.
+    const child = spawn(
+      process.execPath,
+      ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+      { detached: true, stdio: "ignore" },
+    );
+    child.unref();
+    const lock = acquireGatewayLock(dir, { pid: child.pid! });
+    assert.equal(lock.status, "acquired");
+    const stopped = await stopDaemon(dir);
+    assert.equal(stopped, true);
+    // Give the escalation window time to elapse, then the child must be gone.
+    await new Promise((r) => setTimeout(r, 1600));
+    let alive = true;
+    try { process.kill(child.pid!, 0); } catch { alive = false; }
+    assert.equal(alive, false, "SIGTERM-ignoring daemon must be SIGKILLed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
