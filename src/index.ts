@@ -85,6 +85,7 @@ import {
 } from "./application/command-router.js";
 import {
 	handleInbound as handleInboundImpl,
+	handleConversationMessage as handleConversationMessageImpl,
 	type MessageHandlerDeps,
 } from "./application/message-handler.js";
 import {
@@ -365,6 +366,12 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		msg?: FeishuInboundMessage,
 		cardKey?: string,
 	) => exportDiagnosticsImpl(diagnosticsDeps, msg, cardKey);
+	// handleConversationMessage 包装（必须在 commandRouterDeps 之前——TDZ）。
+	const handleConversationMessage = (
+		msg: FeishuInboundMessage,
+		text: string,
+		images: Array<{ type: "image"; data: string; mimeType: string }> = [],
+	) => handleConversationMessageImpl(messageHandlerDeps, msg, text, images);
 
 	// ---- DDD Step 3：命令分发已迁至 application/command-router，闭包薄包装（调用点不变） ----
 	const commandRouterDeps: CommandRouterDeps = {
@@ -374,7 +381,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		conversationKeyFor,
 		replyTo,
 		markDone,
-		exportDiagnostics,
+			exportDiagnostics,
 		handleConversationMessage,
 		detectSchedulerInstalled,
 		buildHelpCard,
@@ -407,11 +414,14 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		outbox,
 		router,
 		piBackend,
+		liveChannel,
+		eventForwarder,
+		bridgeRuntime,
+		streamTargets,
 		logger,
 		replyTo,
 		conversationKeyFor,
 		handleCommand,
-		handleConversationMessage,
 		buildWelcomeCard,
 	};
 	const handleInbound = (
@@ -419,111 +429,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		opts: { skipDedupe?: boolean } = {},
 	) => handleInboundImpl(messageHandlerDeps, msg, opts);
 
-	async function handleConversationMessage(
-		msg: FeishuInboundMessage,
-		text: string,
-		images: Array<{ type: "image"; data: string; mimeType: string }> = [],
-	): Promise<void> {
-		if (!conversations || !eventForwarder || !outbox || !bridgeRuntime) return;
-		const key = conversationKeyFor(msg);
-		const cfg = loadConfig();
-		const turnsCfg = cfg?.turns ?? DEFAULT_CONFIG.turns;
-		const route = router.getRoute(key) ?? {
-			sessionKey: key,
-			chatId: msg.chatId,
-			chatType: msg.chatType,
-			threadMessageId: msg.messageId,
-		};
-		const routeRef: RouteRef = {
-			conversationKey: key,
-			chatId: route.chatId,
-			chatType: route.chatType,
-			threadMessageId: route.threadMessageId,
-		};
-		const runId = `run-${Date.now().toString(36)}`;
-
-		// Streaming card lifecycle: one card per conversation turn.
-		const cardId = `${key}:${runId}`;
-		let streamCreated = false;
-
-		const onDelta = (delta: string): void => {
-			// 2026-08-08 用户指令：回复每次一条（省流量）——streaming.enabled=false
-			// 时不流式更新，直接发完整回复；需要流式可 /feishu-config
-			// forward.streaming.enabled=true 热改。
-			if (!cfg?.forward.streaming.enabled) return;
-			if (!streamCreated) {
-				// 2026-08-08 流式修复（spec §3.1 B1）：首次 delta 记录回复目标，
-				// 供 liveChannel.send 创建流式卡片时使用真实 messageId/chatId。
-				streamTargets.set(cardId, {
-					messageId:
-						route.threadMessageId ??
-						(route as { lastMessageId?: string }).lastMessageId,
-					chatId: route.chatId,
-				});
-			}
-			liveChannel?.patchDelta(cardId, delta);
-			streamCreated = true;
-		};
-
-		const ctx = {
-			key,
-			route: routeRef,
-			sessionId: "",
-			runId,
-			streamCardId: cardId,
-		};
-
-		// C3: mark this conversation as an active feishu input so scheduler
-		// toolResults (schedule_prompt) bind their jobs to this route.
-		bridgeRuntime.beginFeishuInput(key);
-		try {
-			// On first delta, create the stream card (sender creates it via
-			// LiveChannel's send callback — see wiring below).
-			const finalText = await conversations.prompt(key, text, {
-				turnTimeoutMs: turnsCfg.turnTimeoutMs,
-				ackAfterMs: turnsCfg.ackAfterMs,
-				onDelta,
-				images: images.length ? images : undefined,
-			});
-			ctx.sessionId = conversations?.peekSessionId(key) ?? ctx.sessionId;
-			// 2026-08-08 用户指令：无实际文本输出（如 pi-goal 激活回合——
-			// 扩展命令激活目标不算完成）→ 不发 "No response."、不打 DONE；
-			// 任务的中间输出由持续订阅（onSessionDelta）流式显示。
-			if (!finalText || finalText === "No response.") {
-				if (streamCreated) {
-					await liveChannel?.finalize(cardId);
-				}
-				return;
-			}
-			// 任务完成（用户指令 2026-08-07）：有实际回复才对触发消息打 DONE 表情，
-			// best-effort（失败静默忽略，不阻塞回复投递）。
-			if (cfg?.forward.reactions.enabled) {
-				void transport?.addReaction(
-					msg.messageId,
-					cfg.forward.reactions.doneEmoji || "DONE",
-				);
-			}
-			// 2026-08-08：每轮输出已由持续订阅（onAssistantMessage → message_end）
-			// 逐条发送；turn_end 不再重复发最终结果（最后一条 message_end 即最终）。
-			if (streamCreated) {
-				await liveChannel?.finalize(cardId);
-			}
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			logger.error("feishu.prompt.error", { key, error: message });
-			await outbox
-				.enqueue({
-					dedupeKey: `error:${key}:${Date.now()}`,
-					laneKey: key,
-					route: routeRef,
-					kind: "notify",
-					payload: { type: "text", text: `处理失败：${message.slice(0, 500)}` },
-				})
-				.catch(() => undefined);
-		} finally {
-			bridgeRuntime.endFeishuInput(key);
-		}
-	}
 
 	// ---------------- diagnostics ----------------
 

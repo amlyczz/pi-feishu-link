@@ -19,6 +19,10 @@ import { pickRandomReaction } from "../common/reactions.js";
 import { getPendingSelect, tryConsumeSelect } from "../commands/pi-command-adapter.js";
 import { isVoiceMessage, processAttachments } from "../inbound/attachment-pipeline.js";
 import { parseCommand } from "../commands/command-controller.js";
+import type { LiveChannel } from "../outbound/live-channel.js";
+import type { EventForwarder } from "../outbound/event-forwarder.js";
+import type { BridgeRuntime } from "../sessions/bridge-runtime.js";
+import { DEFAULT_CONFIG } from "../common/config.js";
 
 export interface MessageHandlerDeps {
 	supervisor?: { recordEvent(): void };
@@ -32,6 +36,13 @@ export interface MessageHandlerDeps {
 	outbox?: Outbox;
 	router: OutboundRouter;
 	piBackend?: PiSessionBackend;
+	liveChannel?: LiveChannel;
+	eventForwarder?: EventForwarder;
+	bridgeRuntime?: BridgeRuntime;
+	streamTargets: Map<
+		string,
+		{ messageId?: string; chatId: string }
+	>;
 	logger: { info(event: string, data?: Record<string, unknown>): void };
 	replyTo(
 		msg: FeishuInboundMessage,
@@ -42,11 +53,6 @@ export interface MessageHandlerDeps {
 		msg: FeishuInboundMessage,
 		cmd: { name: string; rawArgs: string; args: string[] },
 		rawText: string,
-	): Promise<void>;
-	handleConversationMessage(
-		msg: FeishuInboundMessage,
-		text: string,
-		images?: Array<{ type: "image"; data: string; mimeType: string }>,
 	): Promise<void>;
 	buildWelcomeCard(name: string): unknown;
 }
@@ -243,5 +249,91 @@ export async function handleInbound(
 	const promptText =
 		[text, attachments.text].filter(Boolean).join("\n\n").trim() ||
 		"(附件消息)";
-	await deps.handleConversationMessage(msg, promptText, attachments.images);
+	await handleConversationMessage(deps, msg, promptText, attachments.images);
+}
+
+/**
+ * 对话编排（spec §6.4 / 2026-08-08）：prompt FIFO + 流式卡（streaming 开关）+
+ * 空输出静默 + DONE 表情。每轮输出由持续订阅（onAssistantMessage →
+ * message_end）逐条发送，turn_end 不再重复发最终结果。
+ */
+export async function handleConversationMessage(
+	deps: MessageHandlerDeps,
+	msg: FeishuInboundMessage,
+	text: string,
+	images: Array<{ type: "image"; data: string; mimeType: string }> = [],
+): Promise<void> {
+	if (!deps.conversations || !deps.eventForwarder || !deps.outbox || !deps.bridgeRuntime)
+		return;
+	const key = deps.conversationKeyFor(msg);
+	const cfg = deps.cfg();
+	const turnsCfg = cfg?.turns ?? DEFAULT_CONFIG.turns;
+	const route = deps.router.getRoute(key) ?? {
+		sessionKey: key,
+		chatId: msg.chatId,
+		chatType: msg.chatType,
+		threadMessageId: msg.messageId,
+	};
+	const routeRef = {
+		conversationKey: key,
+		chatId: route.chatId,
+		chatType: route.chatType,
+		threadMessageId: route.threadMessageId,
+	};
+	const runId = `run-${Date.now().toString(36)}`;
+	const cardId = `${key}:${runId}`;
+	let streamCreated = false;
+
+	const onDelta = (delta: string): void => {
+		// streaming.enabled=false 时不流式（省流量）。
+		if (!cfg?.forward.streaming.enabled) return;
+		if (!streamCreated) {
+			deps.streamTargets.set(cardId, {
+				messageId:
+					route.threadMessageId ??
+					(route as { lastMessageId?: string }).lastMessageId,
+				chatId: route.chatId,
+			});
+		}
+		deps.liveChannel?.patchDelta(cardId, delta);
+		streamCreated = true;
+	};
+
+	// C3: mark active feishu input so scheduler toolResults bind to this route.
+	deps.bridgeRuntime.beginFeishuInput(key);
+	try {
+		const finalText = await deps.conversations.prompt(key, text, {
+			turnTimeoutMs: turnsCfg.turnTimeoutMs,
+			ackAfterMs: turnsCfg.ackAfterMs,
+			onDelta,
+			images: images.length ? images : undefined,
+		});
+		// 空输出（如 pi-goal 激活回合）→ 静默，不打 DONE。
+		if (!finalText || finalText === "No response.") {
+			if (streamCreated) await deps.liveChannel?.finalize(cardId);
+			return;
+		}
+		// 有实际回复 → 打 DONE 表情（best-effort）。
+		if (cfg?.forward.reactions.enabled) {
+			void deps.transport?.addReaction(
+				msg.messageId,
+				cfg.forward.reactions.doneEmoji || "DONE",
+			);
+		}
+		if (streamCreated) await deps.liveChannel?.finalize(cardId);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		deps.logger.info("feishu.prompt.error", { key, error: message });
+		await deps.outbox
+			.enqueue({
+				dedupeKey: `error:${key}:${Date.now()}`,
+				laneKey: key,
+				route: routeRef,
+				kind: "notify",
+				payload: { type: "text", text: `处理失败：${message.slice(0, 500)}` },
+			})
+			.catch(() => undefined);
+	} finally {
+		deps.bridgeRuntime.endFeishuInput(key);
+	}
 }
