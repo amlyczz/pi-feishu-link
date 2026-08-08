@@ -31,6 +31,10 @@ const BLACKLIST_PATTERNS: RegExp[] = [
 	/\b(?:curl|wget|nc|ncat)\b[^|;\n]*\|\s*(?:sh|bash|zsh|python|python3|perl|ruby|node|php)\b/i,
 	// Pipe local content into a shell OR an interpreter (content is executed).
 	/\b(?:cat|echo|sh|bash|zsh)\b[^|;\n]*\|\s*(?:sh|bash|zsh|python|python3|perl|ruby|node|php)\b/i,
+	// 2026-08-08（对抗性审查 S1）：下载命令（curl/wget/nc/ncat）经任意中间
+	// 变换（base64/tar/openssl 等）管道到 shell/解释器结尾 = 下载即执行——
+	// 拦截绕过。lookahead 限定含下载源，避免误报数据管道（node|python）。
+	/^(?=.*\b(?:curl|wget|nc|ncat)\b).*\|\s*(?:sh|bash|zsh|python|python3|perl|ruby|node|php)\b[^|]*$/i,
 	// sudo/doas rm -r -f targeting the root.
 	/\b(?:sudo|doas)\s+rm\s+(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+[^|;\n]*(\s|^)\/(?:\*|\s|$|\.|["'}\]])/i,
 	// Raw device destruction.
