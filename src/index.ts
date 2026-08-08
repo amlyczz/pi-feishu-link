@@ -76,6 +76,10 @@ import {
 	type PiCommandDeps,
 } from "./commands/pi-command-adapter.js";
 import {
+	formatStatusLine,
+	statusDetailLines,
+} from "./application/status-formatter.js";
+import {
 	shouldAcceptGroupMessage,
 	extractPlainTextForTrigger,
 	parseGroupKeywords,
@@ -351,7 +355,10 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 				case "status":
 					await replyTo(
 						msg,
-						buildStatusCard(formatStatusLine(), statusDetailLines()),
+						buildStatusCard(
+							formatStatusLine(statusStore.get()),
+							statusDetailLines(statusStore.get()),
+						),
 					);
 					break;
 				case "stop":
@@ -847,26 +854,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 
 	// ---------------- status formatting ----------------
 
-	function formatStatusLine(): string {
-		const s = statusStore.get();
-		const stateLabel: Record<string, string> = {
-			connected: "🟢 已连接",
-			connecting: "🟡 连接中",
-			degraded: "🟠 降级",
-			restarting: "🟠 重启中",
-			disconnected: "🔴 已断开",
-		};
-		return `${stateLabel[s.connState] ?? s.connState} · 运行 ${Math.round((Date.now() - s.startedAt) / 60_000)}min`;
-	}
-
-	function statusDetailLines(): string[] {
-		const s = statusStore.get();
-		return [
-			`入站 ${s.inboundCount} / 出站 ${s.outboundCount} / outbox 积压 ${s.outboxPending}`,
-			`重连 ${s.reconnectCount} 次 · 会话 ${s.residentSessions}/${s.maxResident}`,
-			`定时任务路由 ${s.boundJobs} 个`,
-		];
-	}
+	// ---------------- status formatting（DDD Step 1：已迁至 application/status-formatter）----------------
 
 	// ---------------- start / stop ----------------
 
@@ -1297,7 +1285,10 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		if (op === "model")
 			return buildSimpleTextCard("发送 /model <模型ID> 切换模型。");
 		if (op === "status")
-			return buildStatusCard(formatStatusLine(), statusDetailLines());
+			return buildStatusCard(
+				formatStatusLine(statusStore.get()),
+				statusDetailLines(statusStore.get()),
+			);
 		if (op === "new") {
 			await conversations?.newConversation(key);
 			permissionBridge?.resetSessionMemory(key);
@@ -1822,7 +1813,9 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					void refreshConnectionStatus();
 					return;
 				case "status":
-					notify(`${formatStatusLine()}\n${statusDetailLines().join("\n")}`);
+					notify(
+						`${formatStatusLine(statusStore.get())}\n${statusDetailLines(statusStore.get()).join("\n")}`,
+					);
 					return;
 				case "doctor":
 					await exportDiagnostics();
