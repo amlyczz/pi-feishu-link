@@ -88,6 +88,10 @@ import {
 	type MessageHandlerDeps,
 } from "./application/message-handler.js";
 import {
+	exportDiagnostics as exportDiagnosticsImpl,
+	type DiagnosticsDeps,
+} from "./application/diagnostics-service.js";
+import {
 	notifyOwner as notifyOwnerImpl,
 	notifyConversation as notifyConversationImpl,
 	notifyConversationCard as notifyConversationCardImpl,
@@ -332,6 +336,36 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		);
 	}
 
+	// ---- DDD 应用层包装：通知/诊断/命令/消息（依赖倒置：先定义被引用包装） ----
+	const notifyDeps: NotificationDeps = { outbox, router };
+	const notifyOwner = (text: string) => notifyOwnerImpl(notifyDeps, text);
+	const notifyConversation = (key: string, text: string) =>
+		notifyConversationImpl(notifyDeps, key, text);
+	const notifyConversationCard = (key: string, card: unknown) =>
+		notifyConversationCardImpl(notifyDeps, key, card);
+	const notifyOwnerCard = (card: unknown) =>
+		notifyOwnerCardImpl(notifyDeps, card);
+	const routeToRef = (
+		route: Route | undefined,
+		fallback: { chatId: string; chatType: "p2p" | "group"; threadMessageId?: string },
+	) => routeToRefImpl(route, fallback);
+	const diagnosticsDeps: DiagnosticsDeps = {
+		cfg: loadConfig,
+		statusStore,
+		logger,
+		outbox,
+		router,
+		transport,
+		rootDir,
+		conversationKeyFor,
+		replyTo,
+		notifyConversation,
+	};
+	const exportDiagnostics = (
+		msg?: FeishuInboundMessage,
+		cardKey?: string,
+	) => exportDiagnosticsImpl(diagnosticsDeps, msg, cardKey);
+
 	// ---- DDD Step 3：命令分发已迁至 application/command-router，闭包薄包装（调用点不变） ----
 	const commandRouterDeps: CommandRouterDeps = {
 		conversations,
@@ -492,135 +526,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	}
 
 	// ---------------- diagnostics ----------------
-
-	async function exportDiagnostics(
-		msg?: FeishuInboundMessage,
-		cardKey?: string,
-	): Promise<void> {
-		const cfg = loadConfig();
-		const outDir = rootDir() + "/diag-" + Date.now();
-		const input: DiagnosticsInput = {
-			config: cfg ?? DEFAULT_CONFIG,
-			status: statusStore.get(),
-			stateTransitions: statusStore.transitionsLog(),
-			recentEvents: logger.recent(500),
-			doctor: [],
-			outboxPending: outbox?.summary().pending ?? 0,
-			outboxFailed: [],
-			reproTrace: [],
-			versions: {
-				extension: "0.2.0",
-				pi: process.env.PI_VERSION ?? "unknown",
-				node: process.version,
-				os: process.platform,
-				arch: process.arch,
-				sdk: "lark-node-sdk",
-				uptimeMs: Date.now() - (statusStore.get().startedAt ?? Date.now()),
-				configSchema: cfg?.schemaVersion ?? 1,
-			},
-			includeContent: false,
-		};
-		// Permission self-check (spec §12 #1): group open policy needs the
-		// "获取群组中所有消息" scope — probe it live when a transport exists.
-		if (transport) {
-			const perm = await probeGroupMessagePermission({
-				listMessages: (chatId: string, opts: { startTimeMs: number }) =>
-					transport!.listMessages(chatId, opts),
-				groupChatIds: () => Object.keys(router.routesSnapshot()),
-			});
-			input.doctor.push({
-				check: "group-read-permission",
-				status:
-					perm.status === "ok"
-						? "ok"
-						: perm.status === "missing"
-							? "error"
-							: "warn",
-				detail: perm.detail,
-			});
-		}
-		input.doctor = runDoctorChecks(input);
-		const result = buildDiagnostics(input, outDir);
-		logger.info("feishu.diagnostics.built", {
-			files: result.files.length,
-			bytes: result.bytes,
-		});
-		const summary = `诊断包已生成（${Math.round(result.bytes / 1024)}KB，${result.files.length} 个文件）：\n\`${outDir}\``;
-		// I2: when triggered from Feishu, deliver the bundle as a FILE to the
-		// requesting chat (spec §6.17/§9.6) instead of only a local path.
-		if (msg) {
-			await replyTo(msg, summary);
-			await sendDiagnosticsBundle(outDir, {
-				conversationKey: conversationKeyFor(msg),
-				chatId: msg.chatId,
-				chatType: msg.chatType,
-				threadMessageId: msg.messageId,
-			});
-		} else if (cardKey) {
-			const route = router.getRoute(cardKey);
-			if (route)
-				await sendDiagnosticsBundle(outDir, {
-					conversationKey: route.sessionKey,
-					chatId: route.chatId,
-					chatType: route.chatType,
-					threadMessageId: route.threadMessageId,
-				});
-			else logger.info("feishu.diagnostics.local", { outDir });
-		} else {
-			logger.info("feishu.diagnostics.local", { outDir });
-		}
-	}
-
-	/** I2: tar the bundle and send it via the outbox media lane (≤20MB). */
-	async function sendDiagnosticsBundle(
-		outDir: string,
-		route: {
-			conversationKey: string;
-			chatId: string;
-			chatType: "p2p" | "group";
-			threadMessageId?: string;
-		},
-	): Promise<void> {
-		if (!outbox) return;
-		try {
-			const tarPath = `${outDir}.tar.gz`;
-			execFileSync(
-				"tar",
-				["-czf", tarPath, "-C", rootDir(), basename(outDir)],
-				{ stdio: "ignore" },
-			);
-			const { readFileSync, statSync } = await import("node:fs");
-			const st = statSync(tarPath);
-			if (st.size > 20 * 1024 * 1024) {
-				await notifyConversation(
-					route.conversationKey,
-					"诊断包超过 20MB，未发送。可本地 /feishu doctor 查看。",
-				);
-				return;
-			}
-			await outbox.enqueue({
-				dedupeKey: `diag:${Date.now()}`,
-				laneKey: route.conversationKey,
-				route: {
-					conversationKey: route.conversationKey,
-					chatId: route.chatId,
-					chatType: route.chatType,
-					threadMessageId: route.threadMessageId,
-				},
-				kind: "media",
-				payload: {
-					type: "media",
-					fileType: 4,
-					fileData: readFileSync(tarPath).toString("base64"),
-					fileName: basename(tarPath),
-				},
-			});
-		} catch (err) {
-			logger.error("feishu.diagnostics.send_failed", {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}
 
 	// ---------------- status formatting ----------------
 
@@ -915,20 +820,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		});
 		return "started";
 	}
-
-	// ---- DDD Step 2：通知已迁至 application/notification-service，闭包薄包装（调用点不变） ----
-	const notifyDeps: NotificationDeps = { outbox, router };
-	const notifyOwner = (text: string) => notifyOwnerImpl(notifyDeps, text);
-	const notifyConversation = (key: string, text: string) =>
-		notifyConversationImpl(notifyDeps, key, text);
-	const notifyConversationCard = (key: string, card: unknown) =>
-		notifyConversationCardImpl(notifyDeps, key, card);
-	const notifyOwnerCard = (card: unknown) =>
-		notifyOwnerCardImpl(notifyDeps, card);
-	const routeToRef = (
-		route: Route | undefined,
-		fallback: { chatId: string; chatType: "p2p" | "group"; threadMessageId?: string },
-	) => routeToRefImpl(route, fallback);
 
 	async function stopBridge(): Promise<void> {
 		started = false;
