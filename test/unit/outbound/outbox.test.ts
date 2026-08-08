@@ -126,6 +126,46 @@ test("FIFO within a lane", async () => {
 	}
 });
 
+test("失败消息不阻塞 lane：排队尾重试（2026-08-08 spec §3.1）", async () => {
+	const dir = tempDir();
+	try {
+		const order: string[] = [];
+		let failFirst = true;
+		const outbox = new Outbox({
+			dir,
+			sender: async (env) => {
+				const t = textOf(env.payload);
+				order.push(t);
+				if (t.includes("msg-1") && failFirst) {
+					failFirst = false;
+					throw new Error("temporary failure");
+				}
+				return {};
+			},
+			maxAttemptsBeforeAlert: 3,
+			sentRetentionMs: 60_000,
+			maxPendingEnvelopes: 100,
+			maxEnvelopeBytes: 1024,
+			maxOutboxDirBytes: 10_000_000,
+			compactIntervalMs: 0,
+			backoffBaseMs: 100,
+			backoffMaxMs: 200,
+		});
+		await outbox.init();
+		await outbox.enqueue(makeEnv("lane-a", "final", 1));
+		await outbox.enqueue(makeEnv("lane-a", "final", 2));
+		await outbox.drainIdle();
+		// msg-1 首次失败（移出 lane）→ msg-2 立即发（不被阻塞）→ msg-1 定时重试成功
+		assert.equal(order.length, 3, "msg-1 首次失败 + msg-2 + msg-1 重试");
+		const i2 = order.indexOf("lane-a-msg-2");
+		const last1 = order.lastIndexOf("lane-a-msg-1");
+		assert.ok(i2 >= 0 && i2 < last1, "后续消息不应被失败消息阻塞");
+		await outbox.close();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("stuck lane does not block other lanes (per-lane parallelism)", async () => {
 	const dir = tempDir();
 	try {

@@ -398,10 +398,21 @@ export class Outbox {
 							attempts: env.attempts,
 						});
 					}
-					lane!.unshift(env.id);
-					await sleep(
-						Math.min(env.nextRetryAt - Date.now(), RETRY_SAFETY_SLEEP_MS),
-					);
+					// 2026-08-08（spec §3.1）：失败消息**移出 lane**，用定时器到点
+					// 重新入队重试——不留在队列里阻塞后续消息（此前 unshift 回队头
+					// + sleep 退避会卡死整个 lane，"发消息没回复"故障 F1）。牺牲
+					// 严格 FIFO，换取会话可用性（飞书会话可接受乱序）。
+					const retryMs = Math.max(1, env.nextRetryAt - Date.now());
+					setTimeout(() => {
+						if (this.closed) return;
+						let lane = this.lanes.get(laneKey);
+						if (!lane) {
+							lane = [];
+							this.lanes.set(laneKey, lane);
+						}
+						lane.push(env.id);
+						this.schedulePump(laneKey);
+					}, retryMs).unref?.();
 				}
 			}
 		}

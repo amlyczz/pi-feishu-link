@@ -1144,6 +1144,13 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			});
 		}, 60_000).unref?.();
 
+		// 2026-08-08（spec §3.2）：启动立即刷新 outbox 计数——此前依赖 60s
+		// 定时器，启动后首 60s 显示持久化的旧值（误导"积压"）。
+		statusStore.update({
+			outboxPending: outbox?.summary().pending ?? 0,
+			outboxFailed: outbox?.summary().failed ?? 0,
+		});
+
 		logger.info("feishu.bridge.started", {
 			appId: mask(cfg.appId),
 			domain: cfg.domain,
