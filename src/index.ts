@@ -692,20 +692,11 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					cfg.forward.reactions.doneEmoji || "DONE",
 				);
 			}
-			// I10: settle the volatile live channel BEFORE the durable final is
-			// enqueued — a pending stream patch must not clobber the finalized card.
+			// 2026-08-08：每轮输出已由持续订阅（onAssistantMessage → message_end）
+			// 逐条发送；turn_end 不再重复发最终结果（最后一条 message_end 即最终）。
 			if (streamCreated) {
 				await liveChannel?.finalize(cardId);
 			}
-			await eventForwarder.handle(
-				{
-					type: "turn_end",
-					finalText,
-					cardId: streamCreated ? cardId : undefined,
-					assistantMsgId: `${key}:${Date.now()}`,
-				},
-				ctx,
-			);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			logger.error("feishu.prompt.error", { key, error: message });
@@ -990,21 +981,27 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			maxResident: cfg.sessions.maxResident,
 			idleDisposeMs: cfg.sessions.idleDisposeMs,
 			turnSupervisor,
-			// 2026-08-08：会话持续订阅——pi-goal 等扩展的自动执行回合（无用户
-			// 消息触发）中间输出也流式显示到飞书（通用机制，不识别任何命令）。
-			onSessionDelta: (key, delta) => {
-				// 2026-08-08：streaming.enabled=false 时不转发中间输出（省流量）。
-				const liveCfg = loadConfig();
-				if (!liveCfg?.forward.streaming.enabled) return;
-				const cardId = `sess:${key}`;
-				if (!streamTargets.has(cardId)) {
-					const route = router.getRoute(key);
-					streamTargets.set(cardId, {
-						messageId: route?.threadMessageId ?? route?.lastMessageId,
-						chatId: route?.chatId ?? "",
-					});
-				}
-				liveChannel?.patchDelta(cardId, delta);
+			// 2026-08-08：会话持续订阅——react 多轮循环的**每一轮** assistant
+			// 完整输出（message_end）各发一条飞书消息（用户要求）。
+			// 通用机制，不识别任何命令。
+			onAssistantMessage: (key, text) => {
+				if (!text) return;
+				const route = router.getRoute(key);
+				if (!route) return;
+				void outbox
+					?.enqueue({
+						dedupeKey: `assistant:${key}:${Date.now()}`,
+						laneKey: key,
+						route: {
+							conversationKey: key,
+							chatId: route.chatId,
+							chatType: route.chatType,
+							threadMessageId: route.threadMessageId,
+						},
+						kind: "assistant-output",
+						payload: { type: "text", text },
+					})
+					.catch(() => undefined);
 			},
 		});
 

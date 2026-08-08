@@ -82,10 +82,11 @@ export interface ConversationManagerOptions {
 	idleDisposeMs?: number;
 	turnSupervisor?: TurnSupervisor;
 	/**
-	 * 2026-08-08：会话持续订阅的模型文本 delta（pi-goal 等扩展的自动执行
-	 * 回合——无用户消息触发——输出也能流式显示）。通用机制，不识别任何命令。
+	 * 2026-08-08：会话持续订阅的 assistant 完整输出（message_end）——
+	 * react 多轮循环的**每一轮输出**都转发（用户要求：一次提问的多个输出
+	 * 都要发到飞书）。通用机制，不识别任何命令。
 	 */
-	onSessionDelta?: (key: ConversationKey, delta: string) => void;
+	onAssistantMessage?: (key: ConversationKey, text: string) => void;
 	now?: () => number;
 }
 
@@ -111,9 +112,9 @@ export class ConversationManager {
 	private readonly maxResident: number;
 	private readonly idleDisposeMs: number;
 	private readonly turnSupervisor?: TurnSupervisor;
-	private readonly onSessionDelta?: (
+	private readonly onAssistantMessage?: (
 		key: ConversationKey,
-		delta: string,
+		text: string,
 	) => void;
 	private readonly now: () => number;
 	private readonly entries = new Map<ConversationKey, Entry>();
@@ -129,7 +130,7 @@ export class ConversationManager {
 		this.maxResident = options.maxResident ?? 8;
 		this.idleDisposeMs = options.idleDisposeMs ?? 1_800_000;
 		this.turnSupervisor = options.turnSupervisor;
-		this.onSessionDelta = options.onSessionDelta;
+		this.onAssistantMessage = options.onAssistantMessage;
 		this.now = options.now ?? Date.now;
 		this.state = readJson<ConversationState>(this.stateFile, {
 			sessions: {},
@@ -413,15 +414,14 @@ export class ConversationManager {
 				sessionFile && existsSync(sessionFile) ? sessionFile : undefined,
 		});
 		entry.handle = handle;
-		// 2026-08-08：会话创建即挂持续订阅（一次）。pi-goal 等扩展的自动执行
-		// 回合（entry.busy=false，无用户消息触发）输出也流式转发——中间输出
-		// 全程可见；用户回合（busy=true）仍由 prompt 内 onDelta 处理，不重复。
-		if (this.onSessionDelta && !entry.liveSubscribed) {
+		// 2026-08-08：会话创建即挂持续订阅（一次）。react 多轮循环的每一轮
+		// assistant 完整输出（message_end）都转发到飞书（用户回合 busy 时也
+		// 转发——用户要的就是每轮输出逐条可见）。
+		if (this.onAssistantMessage && !entry.liveSubscribed) {
 			entry.liveSubscribed = true;
 			handle.subscribe((event: unknown) => {
-				if (entry.busy) return; // 用户回合由 per-turn onDelta 处理
-				const delta = extractTextDelta(event);
-				if (delta) this.onSessionDelta?.(key, delta);
+				const text = extractAssistantMessage(event);
+				if (text) this.onAssistantMessage?.(key, text);
 			});
 		}
 		this.sessionKeys.set(handle.sessionId, key);
@@ -438,6 +438,32 @@ export class ConversationManager {
 			// best-effort
 		}
 	}
+}
+
+function extractAssistantMessage(event: unknown): string | undefined {
+	// 2026-08-08：react 多轮循环的每轮 assistant 完整输出（message_end）。
+	if (typeof event !== "object" || event === null) return undefined;
+	const e = event as {
+		type?: string;
+		message?: { role?: string; content?: unknown };
+	};
+	if (e.type !== "message_end") return undefined;
+	const m = e.message;
+	if (!m || m.role !== "assistant") return undefined;
+	const content = m.content;
+	if (typeof content === "string") return content.trim() || undefined;
+	if (Array.isArray(content)) {
+		const text = content
+			.map((p) =>
+				p && typeof p === "object" && (p as { type?: string }).type === "text"
+					? ((p as { text?: string }).text ?? "")
+					: "",
+			)
+			.join("")
+			.trim();
+		return text || undefined;
+	}
+	return undefined;
 }
 
 function extractTextDelta(event: unknown): string | undefined {

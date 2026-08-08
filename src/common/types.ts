@@ -135,7 +135,8 @@ export type EnvelopeKind =
 	| "notify"
 	| "scheduled"
 	| "command-reply"
-	| "media";
+	| "media"
+	| "assistant-output";
 
 export type EnvelopeStatus = "pending" | "sending" | "sent" | "failed";
 

@@ -48,6 +48,13 @@ class FakeHandle implements PiSessionHandle {
 			assistantMessageEvent: { type: "text_delta", delta },
 		});
 	}
+	/** 2026-08-08：模拟 message_end（每轮完整输出）。 */
+	emitMessageEnd(text: string, role: string): void {
+		this.subscriber?.({
+			type: "message_end",
+			message: { role, content: text },
+		});
+	}
 	getLastAssistantText(): string {
 		return `answer:${this.lastPrompt}`;
 	}
@@ -409,39 +416,40 @@ test("queued message triggers queueWarn tracking while a turn is active", async 
 	}
 });
 
-test("持续订阅：自动回合（busy=false）delta 转发；用户回合（busy=true）不重复（2026-08-08）", async () => {
+test("持续订阅：每轮 assistant 完整输出（message_end）逐条转发（2026-08-08）", async () => {
 	dir = mkdtempSync(join(tmpdir(), "fb-cm-live-"));
 	const stateFile = join(dir, "state.json");
 	created.length = 0;
 	disposed.length = 0;
 	handles.clear();
-	const deltas: Array<{ key: string; delta: string }> = [];
+	const msgs: Array<{ key: string; text: string }> = [];
 	const mgr = new ConversationManager({
 		cwd: "/work/default",
 		backend: new FakeBackend(),
 		stateFile,
 		maxResident: 4,
-		onSessionDelta: (key, delta) => deltas.push({ key, delta }),
+		onAssistantMessage: (key, text) => msgs.push({ key, text }),
 	});
 	try {
 		const handle = (await mgr.getHandle("k1")) as FakeHandle;
 		assert.ok(handle.subscriber, "会话创建后应挂持续订阅");
-		// 空闲（busy=false）→ 自动回合 delta 转发
-		handle.emitDelta("中间输出A");
-		assert.equal(deltas.length, 1);
-		assert.equal(deltas[0]?.delta, "中间输出A");
-		assert.equal(deltas[0]?.key, "k1");
-		// 用户回合（prompt 中 busy=true）→ 持续订阅跳过（由 per-turn onDelta 处理）
-		handle.holdPrompt = true;
-		const p = mgr.prompt("k1", "用户消息", {
-			turnTimeoutMs: 5000,
-			ackAfterMs: 0,
-		});
-		await new Promise((r) => setTimeout(r, 20));
-		handle.emitDelta("回合中delta");
-		assert.equal(deltas.length, 1, "busy 时不重复转发");
-		handle.releasePrompt();
-		await p;
+		// 每轮 assistant 完整输出（message_end）→ 转发
+		handle.emitMessageEnd("第一轮输出", "assistant");
+		handle.emitMessageEnd("第二轮输出", "assistant");
+		assert.equal(msgs.length, 2);
+		assert.equal(msgs[0]?.text, "第一轮输出");
+		assert.equal(msgs[1]?.text, "第二轮输出");
+		assert.equal(msgs[0]?.key, "k1");
+		// 非 assistant（user/toolResult）不转发
+		handle.emitMessageEnd("用户消息", "user");
+		handle.emitMessageEnd("工具结果", "toolResult");
+		assert.equal(msgs.length, 2);
+		// 空输出跳过（工具调用轮无文本）
+		handle.emitMessageEnd("", "assistant");
+		assert.equal(msgs.length, 2);
+		// 非 message_end 事件不转发
+		handle.emitDelta("流式delta");
+		assert.equal(msgs.length, 2);
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
