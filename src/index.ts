@@ -671,7 +671,16 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 				images: images.length ? images : undefined,
 			});
 			ctx.sessionId = conversations?.peekSessionId(key) ?? ctx.sessionId;
-			// 任务完成（用户指令 2026-08-07）：对触发消息打 DONE 表情，
+			// 2026-08-08 用户指令：无实际文本输出（如 pi-goal 激活回合——
+			// 扩展命令激活目标不算完成）→ 不发 "No response."、不打 DONE；
+			// 任务的中间输出由持续订阅（onSessionDelta）流式显示。
+			if (!finalText || finalText === "No response.") {
+				if (streamCreated) {
+					await liveChannel?.finalize(cardId);
+				}
+				return;
+			}
+			// 任务完成（用户指令 2026-08-07）：有实际回复才对触发消息打 DONE 表情，
 			// best-effort（失败静默忽略，不阻塞回复投递）。
 			if (cfg?.forward.reactions.enabled) {
 				void transport?.addReaction(
