@@ -55,7 +55,32 @@ export function buildDaemonCommand(opts: DaemonOptions): string {
 		"-e",
 		opts.extensionPath,
 	];
-	return `tail -f /dev/null | exec ${shellQuote(piBin)} ${args.map(shellQuote).join(" ")}`;
+	return `tail -f /dev/null & echo $! > ${shellQuote(
+		join(opts.lockDir, "daemon-tail.pid"),
+	)}; exec ${shellQuote(piBin)} ${args.map(shellQuote).join(" ")}`;
+}
+
+/**
+ * 2026-08-08：kill daemon 的 tail 保活管道进程（防孤儿残留）。
+ * daemon 启动时把 tail pid 写入 <lockDir>/daemon-tail.pid；
+ * daemon 退出（busy/卸载/stop）时据此清理，避免多窗口竞态反复产生僵尸 tail。
+ */
+export function killDaemonTail(lockDir: string): void {
+	try {
+		const f = join(lockDir, "daemon-tail.pid");
+		if (!existsSync(f)) return;
+		const pid = Number(readFileSync(f, "utf8").trim());
+		if (Number.isInteger(pid) && pid > 0) {
+			try {
+				process.kill(pid, "SIGTERM");
+			} catch {
+				/* already dead */
+			}
+		}
+		rmSync(f, { force: true });
+	} catch {
+		/* best-effort */
+	}
 }
 
 export interface SpawnResult {
@@ -364,7 +389,9 @@ function killTree(pid: number, signal: NodeJS.Signals): void {
 
 /** Signal the current gateway owner to stop (returns true if it was us/killed). */
 export async function stopDaemon(lockDir: string): Promise<boolean> {
-	return killGatewayOwner(lockDir);
+	const ok = await killGatewayOwner(lockDir);
+	if (ok) killDaemonTail(lockDir); // 2026-08-08：stop 时清理 tail 保活管道
+	return ok;
 }
 
 function sleep(ms: number): Promise<void> {

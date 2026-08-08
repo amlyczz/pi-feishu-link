@@ -47,6 +47,7 @@ import {
 	cleanupStateDirIfUninstalled,
 	extensionStillRegistered,
 	defaultSettingsFiles,
+	killDaemonTail,
 	DAEMON_ENV,
 } from "./host/daemon-host.js";
 import { ConversationManager } from "./sessions/conversation-manager.js";
@@ -1397,7 +1398,20 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		if (isDaemon) {
 			// Daemon child: own the gateway and run the bridge headless.
 			try {
-				await startBridge();
+				const result = await startBridge();
+				if (
+					typeof result === "string" &&
+					result.startsWith("连接由其他进程持有")
+				) {
+					// 2026-08-08 根治：多个 pi TUI 窗口 autoStart 并发 spawn daemon
+					// 时，抢锁失败的 daemon 立即退出——保证同一时刻只有一个 daemon
+					// 存活（此前 busy 后继续挂留，导致多 daemon 残留 + 多 WS 连接）。
+					// 注意：startBridge 成功返回 "started"（非 busy 字符串），
+					// 不能用 "!== already" 判断（曾把成功误判为 busy 导致 daemon 连环退出）。
+					logger.info("feishu.daemon.exit_lock_busy", { reason: result });
+					killDaemonTail(rootDir()); // 清理自己的 tail 保活管道（防孤儿）
+					process.exit(0);
+				}
 				logger.info("feishu.daemon.ready");
 				// 卸载自监控（2026-08-07）：pi 无卸载钩子，detached daemon 不会随
 				// `pi remove` 停止；daemon 自行监控注册状态，被卸载即释放锁退出。
@@ -1406,6 +1420,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 					onExit: async () => {
 						logger.info("feishu.daemon.uninstalled");
 						await stopBridge().catch(() => undefined);
+						killDaemonTail(rootDir()); // 2026-08-08：卸载退出前清理 tail 保活管道
 						// 卸载卫生（2026-08-08）：释放连接后清理整个状态目录
 						// （config.json 含 appSecret / outbox / 日志 / 锁文件），否则残留
 						// 配置会让下次加载自动拉起 daemon——卸载必须真正干净。
@@ -1436,8 +1451,8 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 				// 不该提示"旧 daemon"；仅已卸载才是残留需清理。
 				const stillRegistered = extensionStillRegistered(
 					extensionEntryPath(),
-				defaultSettingsFiles(),
-			);
+					defaultSettingsFiles(),
+				);
 				if (stillRegistered) {
 					setConnectionStatus(
 						`飞书桥已由 daemon（pid ${owner.pid}）持有，无需重复启动。`,

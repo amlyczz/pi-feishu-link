@@ -40,7 +40,12 @@ test("buildDaemonCommand constructs the headless rpc invocation", () => {
 		cwd: "/work",
 		piBin: "/usr/local/bin/pi",
 	});
-	assert.ok(cmd.startsWith("tail -f /dev/null | exec "), cmd);
+	assert.ok(
+		cmd.startsWith("tail -f /dev/null & echo $! > "),
+		"tail 后台保活 + pid 落盘（2026-08-08 防孤儿）",
+	);
+	assert.ok(cmd.includes("daemon-tail.pid"), cmd);
+	assert.ok(cmd.includes("exec "));
 	assert.ok(cmd.includes("'--mode' 'rpc'"), cmd);
 	assert.ok(cmd.includes("'--no-builtin-tools'"), cmd);
 	assert.ok(cmd.includes("'-e' '/abs/ext/index.ts'"), cmd);
