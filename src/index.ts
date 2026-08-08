@@ -45,6 +45,8 @@ import {
 	stopDaemon,
 	startUninstallWatch,
 	cleanupStateDirIfUninstalled,
+	extensionStillRegistered,
+	defaultSettingsFiles,
 	DAEMON_ENV,
 } from "./host/daemon-host.js";
 import { ConversationManager } from "./sessions/conversation-manager.js";
@@ -1429,10 +1431,22 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			// TUI: attach to an existing daemon-owned gateway, else spawn the daemon.
 			const owner = readGatewayOwner(rootDir());
 			if (owner && owner.pid !== process.pid) {
-				// 卸载/重装不会停止旧 daemon（detached 进程）——明确告诉用户原因和动作。
-				setConnectionStatus(
-					`检测到旧 daemon（pid ${owner.pid}）仍持有飞书连接（卸载不会自动停止它）。运行 /feishu takeover 接管，或 /feishu stop 清理`,
-				);
+				// 2026-08-08 修复：区分「正常 daemon 持有」vs「卸载残留僵尸」——
+				// 扩展仍注册（settings 里有本包）时是新 daemon 正常持有连接，
+				// 不该提示"旧 daemon"；仅已卸载才是残留需清理。
+				const stillRegistered = extensionStillRegistered(
+					extensionEntryPath(),
+				defaultSettingsFiles(),
+			);
+				if (stillRegistered) {
+					setConnectionStatus(
+						`飞书桥已由 daemon（pid ${owner.pid}）持有，无需重复启动。`,
+					);
+				} else {
+					setConnectionStatus(
+						`检测到旧 daemon（pid ${owner.pid}）仍持有飞书连接（卸载不会自动停止它）。运行 /feishu takeover 接管，或 /feishu stop 清理`,
+					);
+				}
 				return;
 			}
 			if (owner && owner.pid === process.pid) {
