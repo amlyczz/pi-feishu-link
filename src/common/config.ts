@@ -52,7 +52,7 @@ export const DEFAULT_CONFIG: FeishuConfig = {
 	ownerOpenId: undefined,
 	forward: {
 		aiReply: { mode: "card" },
-		streaming: { enabled: true, throttleMs: 800 },
+		streaming: { enabled: false, throttleMs: 800 },
 		toolCalls: { mode: "summary" },
 		reasoning: { mode: "off" },
 		progress: { enabled: true },

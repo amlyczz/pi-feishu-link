@@ -636,6 +636,10 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		let streamCreated = false;
 
 		const onDelta = (delta: string): void => {
+			// 2026-08-08 用户指令：回复每次一条（省流量）——streaming.enabled=false
+			// 时不流式更新，直接发完整回复；需要流式可 /feishu-config
+			// forward.streaming.enabled=true 热改。
+			if (!cfg?.forward.streaming.enabled) return;
 			if (!streamCreated) {
 				// 2026-08-08 流式修复（spec §3.1 B1）：首次 delta 记录回复目标，
 				// 供 liveChannel.send 创建流式卡片时使用真实 messageId/chatId。
@@ -989,6 +993,9 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			// 2026-08-08：会话持续订阅——pi-goal 等扩展的自动执行回合（无用户
 			// 消息触发）中间输出也流式显示到飞书（通用机制，不识别任何命令）。
 			onSessionDelta: (key, delta) => {
+				// 2026-08-08：streaming.enabled=false 时不转发中间输出（省流量）。
+				const liveCfg = loadConfig();
+				if (!liveCfg?.forward.streaming.enabled) return;
 				const cardId = `sess:${key}`;
 				if (!streamTargets.has(cardId)) {
 					const route = router.getRoute(key);
