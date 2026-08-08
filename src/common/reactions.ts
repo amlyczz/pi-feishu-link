@@ -16,9 +16,6 @@ export const REACTION_POOL: readonly string[] = [
 	"WOW",
 	"CLAP",
 	"Fire",
-	"AMAZE",
-	"AWESOME",
-	"COOL",
 ] as const;
 
 /**
