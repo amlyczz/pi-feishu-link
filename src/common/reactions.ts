@@ -5,7 +5,8 @@
 
 export const DONE_EMOJI = "DONE" as const;
 
-/** 默认随机表情池（飞书 reaction emoji_type，全部排除 DONE）。 */
+/** 默认随机表情池（飞书 reaction emoji_type，全部排除 DONE）。
+ * 2026-08-08 修复：FIRE → Fire（飞书 emoji_type 大小写敏感，FIRE 无效）。 */
 export const REACTION_POOL: readonly string[] = [
 	"THUMBSUP",
 	"OK",
@@ -14,7 +15,7 @@ export const REACTION_POOL: readonly string[] = [
 	"SMILE",
 	"WOW",
 	"CLAP",
-	"FIRE",
+	"Fire",
 	"AMAZE",
 	"AWESOME",
 	"COOL",

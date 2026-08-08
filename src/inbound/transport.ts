@@ -342,6 +342,11 @@ export class FeishuTransport implements SupervisorTransport {
 			.register({
 				"card.action.trigger": async (data: unknown) =>
 					this.handleCardAction(data),
+			})
+			.register({
+				// 2026-08-08：桥自己加表情会触发 reaction.created 推送，
+				// 无需处理——注册空 handler 消除 SDK "no handler" warn。
+				"im.message.reaction.created_v1": async () => undefined,
 			});
 		this.wsClient = new sdk.WSClient({
 			appId: config.appId,
@@ -498,9 +503,16 @@ export class FeishuTransport implements SupervisorTransport {
 			});
 		} catch (err) {
 			// 2026-08-08：打日志便于排查表情回执缺失（此前静默吞错）。
+			// 带响应体 code/msg（如 231001 emoji 类型无效——曾把 FIRE 写成
+			// 大写导致抽到该表情时 400）。
+			const e = err as {
+				response?: { data?: { code?: number; msg?: string } };
+			};
 			this.deps.logger?.error("feishu.reaction.failed", {
 				messageId,
 				emojiType,
+				code: e.response?.data?.code,
+				msg: e.response?.data?.msg,
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
