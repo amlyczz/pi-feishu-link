@@ -1,0 +1,135 @@
+// DDD 应用层（spec 2026-08-08-1700 Step 2）：通知服务——notify* 从 index.ts
+// 搬移，依赖参数化（outbox/router 注入），可单测。
+
+import type { Outbox } from "../outbound/outbox.js";
+import type { OutboundRouter } from "../outbound/outbound-router.js";
+import type { Route, RouteRef } from "../common/types.js";
+
+/** Route → RouteRef（含 fallback 构造）。 */
+export function routeToRef(
+	route: Route | undefined,
+	fallback: {
+		chatId: string;
+		chatType: "p2p" | "group";
+		threadMessageId?: string;
+	},
+): RouteRef {
+	if (route) {
+		return {
+			conversationKey: route.sessionKey,
+			chatId: route.chatId,
+			chatType: route.chatType,
+			threadMessageId: route.threadMessageId,
+			lastMessageId: route.lastMessageId,
+		};
+	}
+	return {
+		conversationKey: fallback.chatId,
+		chatId: fallback.chatId,
+		chatType: fallback.chatType,
+		threadMessageId: fallback.threadMessageId,
+	};
+}
+
+export interface NotificationDeps {
+	outbox?: Outbox;
+	router: OutboundRouter;
+}
+
+/** 通知所有会话（owner 广播）。 */
+export async function notifyOwner(
+	deps: NotificationDeps,
+	text: string,
+): Promise<void> {
+	if (!deps.outbox) return;
+	for (const route of Object.values(deps.router.routesSnapshot())) {
+		const ref = routeToRef(route, {
+			chatId: route.chatId,
+			chatType: route.chatType,
+			threadMessageId: route.threadMessageId,
+		});
+		await deps.outbox
+			.enqueue({
+				dedupeKey: `notify:${ref.conversationKey}:${Date.now()}`,
+				laneKey: ref.conversationKey,
+				route: ref,
+				kind: "notify",
+				payload: { type: "text", text },
+			})
+			.catch(() => undefined);
+	}
+}
+
+/** 通知单个会话（ack / queue-warn / timeout）。 */
+export async function notifyConversation(
+	deps: NotificationDeps,
+	key: string,
+	text: string,
+): Promise<void> {
+	if (!deps.outbox) return;
+	const route = deps.router.getRoute(key);
+	if (!route) return;
+	const ref = routeToRef(route, {
+		chatId: route.chatId,
+		chatType: route.chatType,
+		threadMessageId: route.threadMessageId,
+	});
+	await deps.outbox
+		.enqueue({
+			dedupeKey: `notify:${key}:${Date.now()}`,
+			laneKey: key,
+			route: ref,
+			kind: "notify",
+			payload: { type: "text", text },
+		})
+		.catch(() => undefined);
+}
+
+/** 发送卡片到单个会话（审批卡等）。 */
+export async function notifyConversationCard(
+	deps: NotificationDeps,
+	key: string,
+	card: unknown,
+): Promise<void> {
+	if (!deps.outbox) return;
+	const route = deps.router.getRoute(key);
+	if (!route) return;
+	const ref = routeToRef(route, {
+		chatId: route.chatId,
+		chatType: route.chatType,
+		threadMessageId: route.threadMessageId,
+	});
+	await deps.outbox
+		.enqueue({
+			dedupeKey: `notify:${key}:${Date.now()}`,
+			laneKey: key,
+			route: ref,
+			kind: "notify",
+			payload: { type: "card", card },
+		})
+		.catch(() => undefined);
+}
+
+/** 广播卡片到所有会话。 */
+export async function notifyOwnerCard(
+	deps: NotificationDeps,
+	card: unknown,
+): Promise<void> {
+	if (!deps.outbox) return;
+	for (const route of Object.values(deps.router.routesSnapshot())) {
+		const ref = routeToRef(route, {
+			chatId: route.chatId,
+			chatType: route.chatType,
+			threadMessageId: route.threadMessageId,
+		});
+		await deps.outbox
+			.enqueue({
+				dedupeKey: `notify:${ref.conversationKey}:${Date.now()}`,
+				laneKey: ref.conversationKey,
+				route: ref,
+				kind: "notify",
+				payload: { type: "card", card },
+			})
+			.catch(() => undefined);
+	}
+}

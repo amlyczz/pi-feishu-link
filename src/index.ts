@@ -80,6 +80,14 @@ import {
 	statusDetailLines,
 } from "./application/status-formatter.js";
 import {
+	notifyOwner as notifyOwnerImpl,
+	notifyConversation as notifyConversationImpl,
+	notifyConversationCard as notifyConversationCardImpl,
+	notifyOwnerCard as notifyOwnerCardImpl,
+	routeToRef as routeToRefImpl,
+	type NotificationDeps,
+} from "./application/notification-service.js";
+import {
 	shouldAcceptGroupMessage,
 	extractPlainTextForTrigger,
 	parseGroupKeywords,
@@ -1146,115 +1154,19 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		return "started";
 	}
 
-	function routeToRef(
+	// ---- DDD Step 2：通知已迁至 application/notification-service，闭包薄包装（调用点不变） ----
+	const notifyDeps: NotificationDeps = { outbox, router };
+	const notifyOwner = (text: string) => notifyOwnerImpl(notifyDeps, text);
+	const notifyConversation = (key: string, text: string) =>
+		notifyConversationImpl(notifyDeps, key, text);
+	const notifyConversationCard = (key: string, card: unknown) =>
+		notifyConversationCardImpl(notifyDeps, key, card);
+	const notifyOwnerCard = (card: unknown) =>
+		notifyOwnerCardImpl(notifyDeps, card);
+	const routeToRef = (
 		route: Route | undefined,
-		fallback: {
-			chatId: string;
-			chatType: "p2p" | "group";
-			threadMessageId?: string;
-		},
-	): RouteRef {
-		if (route) {
-			return {
-				conversationKey: route.sessionKey,
-				chatId: route.chatId,
-				chatType: route.chatType,
-				threadMessageId: route.threadMessageId,
-				lastMessageId: route.lastMessageId,
-			};
-		}
-		return {
-			conversationKey: fallback.chatId,
-			chatId: fallback.chatId,
-			chatType: fallback.chatType,
-			threadMessageId: fallback.threadMessageId,
-		};
-	}
-
-	async function notifyOwner(text: string): Promise<void> {
-		if (!outbox) return;
-		for (const route of Object.values(router.routesSnapshot())) {
-			const ref = routeToRef(route, {
-				chatId: route.chatId,
-				chatType: route.chatType,
-				threadMessageId: route.threadMessageId,
-			});
-			await outbox
-				.enqueue({
-					dedupeKey: `notify:${ref.conversationKey}:${Date.now()}`,
-					laneKey: ref.conversationKey,
-					route: ref,
-					kind: "notify",
-					payload: { type: "text", text },
-				})
-				.catch(() => undefined);
-		}
-	}
-
-	/** I5: notify exactly one conversation (ack / queue-warn / timeout). */
-	async function notifyConversation(key: string, text: string): Promise<void> {
-		if (!outbox) return;
-		const route = router.getRoute(key);
-		if (!route) return;
-		const ref = routeToRef(route, {
-			chatId: route.chatId,
-			chatType: route.chatType,
-			threadMessageId: route.threadMessageId,
-		});
-		await outbox
-			.enqueue({
-				dedupeKey: `notify:${key}:${Date.now()}`,
-				laneKey: key,
-				route: ref,
-				kind: "notify",
-				payload: { type: "text", text },
-			})
-			.catch(() => undefined);
-	}
-
-	/** Send a card to exactly one conversation (approval cards etc.). */
-	async function notifyConversationCard(
-		key: string,
-		card: unknown,
-	): Promise<void> {
-		if (!outbox) return;
-		const route = router.getRoute(key);
-		if (!route) return;
-		const ref = routeToRef(route, {
-			chatId: route.chatId,
-			chatType: route.chatType,
-			threadMessageId: route.threadMessageId,
-		});
-		await outbox
-			.enqueue({
-				dedupeKey: `notify:${key}:${Date.now()}`,
-				laneKey: key,
-				route: ref,
-				kind: "notify",
-				payload: { type: "card", card },
-			})
-			.catch(() => undefined);
-	}
-
-	async function notifyOwnerCard(card: unknown): Promise<void> {
-		if (!outbox) return;
-		for (const route of Object.values(router.routesSnapshot())) {
-			const ref = routeToRef(route, {
-				chatId: route.chatId,
-				chatType: route.chatType,
-				threadMessageId: route.threadMessageId,
-			});
-			await outbox
-				.enqueue({
-					dedupeKey: `notify:${ref.conversationKey}:${Date.now()}`,
-					laneKey: ref.conversationKey,
-					route: ref,
-					kind: "notify",
-					payload: { type: "card", card },
-				})
-				.catch(() => undefined);
-		}
-	}
+		fallback: { chatId: string; chatType: "p2p" | "group"; threadMessageId?: string },
+	) => routeToRefImpl(route, fallback);
 
 	async function stopBridge(): Promise<void> {
 		started = false;
