@@ -16,9 +16,15 @@ test("默认随机池不包含 DONE", () => {
 });
 
 test("pickRandomReaction 返回池内成员（注入 rng 确定性）", () => {
-	assert.equal(pickRandomReaction(REACTION_POOL, () => 0), REACTION_POOL[0]);
+	assert.equal(
+		pickRandomReaction(REACTION_POOL, () => 0),
+		REACTION_POOL[0],
+	);
 	const last = REACTION_POOL[REACTION_POOL.length - 1];
-	assert.equal(pickRandomReaction(REACTION_POOL, () => 0.999999), last);
+	assert.equal(
+		pickRandomReaction(REACTION_POOL, () => 0.999999),
+		last,
+	);
 });
 
 test("池内即便包含 DONE 也不会被随机到（用户要求）", () => {
@@ -34,8 +40,14 @@ test("空池 / 全 DONE 池回退到默认池", () => {
 });
 
 test("自定义池生效", () => {
-	assert.equal(pickRandomReaction(["FIRE", "CLAP"], () => 0), "FIRE");
-	assert.equal(pickRandomReaction(["FIRE", "CLAP"], () => 0.5), "CLAP");
+	assert.equal(
+		pickRandomReaction(["FIRE", "CLAP"], () => 0),
+		"FIRE",
+	);
+	assert.equal(
+		pickRandomReaction(["FIRE", "CLAP"], () => 0.5),
+		"CLAP",
+	);
 });
 
 test("未传池时使用默认池", () => {

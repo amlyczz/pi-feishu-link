@@ -329,7 +329,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	): Promise<void> {
 		const key = conversationKeyFor(msg);
 		const name = cmd.name;
-		// 1) 桥特有命令（status/workspace/support/feishu-config/stop/help）
+		// 1) 桥特有命令（status/workspace/support/doctor/feishu-config/stop/help）
 		if (
 			[
 				"help",
@@ -337,6 +337,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 				"stop",
 				"workspace",
 				"support",
+				"doctor",
 				"feishu-config",
 			].includes(name)
 		) {
@@ -365,7 +366,8 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 						);
 					}
 					break;
-				case "support": {
+				case "support":
+				case "doctor": {
 					await exportDiagnostics(msg);
 					break;
 				}
@@ -723,7 +725,7 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			outboxFailed: [],
 			reproTrace: [],
 			versions: {
-				extension: "0.1.1",
+				extension: "0.2.0",
 				pi: process.env.PI_VERSION ?? "unknown",
 				node: process.version,
 				os: process.platform,
@@ -764,10 +766,21 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		// requesting chat (spec §6.17/§9.6) instead of only a local path.
 		if (msg) {
 			await replyTo(msg, summary);
-			await sendDiagnosticsBundle(outDir, msg.chatId);
+			await sendDiagnosticsBundle(outDir, {
+				conversationKey: conversationKeyFor(msg),
+				chatId: msg.chatId,
+				chatType: msg.chatType,
+				threadMessageId: msg.messageId,
+			});
 		} else if (cardKey) {
 			const route = router.getRoute(cardKey);
-			if (route) await sendDiagnosticsBundle(outDir, route.chatId);
+			if (route)
+				await sendDiagnosticsBundle(outDir, {
+					conversationKey: route.sessionKey,
+					chatId: route.chatId,
+					chatType: route.chatType,
+					threadMessageId: route.threadMessageId,
+				});
 			else logger.info("feishu.diagnostics.local", { outDir });
 		} else {
 			logger.info("feishu.diagnostics.local", { outDir });
@@ -777,13 +790,14 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	/** I2: tar the bundle and send it via the outbox media lane (≤20MB). */
 	async function sendDiagnosticsBundle(
 		outDir: string,
-		chatId: string,
+		route: {
+			conversationKey: string;
+			chatId: string;
+			chatType: "p2p" | "group";
+			threadMessageId?: string;
+		},
 	): Promise<void> {
 		if (!outbox) return;
-		const route = Object.values(router.routesSnapshot()).find(
-			(r) => r.chatId === chatId,
-		);
-		if (!route) return;
 		try {
 			const tarPath = `${outDir}.tar.gz`;
 			execFileSync(
@@ -795,16 +809,16 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 			const st = statSync(tarPath);
 			if (st.size > 20 * 1024 * 1024) {
 				await notifyConversation(
-					route.sessionKey,
+					route.conversationKey,
 					"诊断包超过 20MB，未发送。可本地 /feishu doctor 查看。",
 				);
 				return;
 			}
 			await outbox.enqueue({
 				dedupeKey: `diag:${Date.now()}`,
-				laneKey: route.sessionKey,
+				laneKey: route.conversationKey,
 				route: {
-					conversationKey: route.sessionKey,
+					conversationKey: route.conversationKey,
 					chatId: route.chatId,
 					chatType: route.chatType,
 					threadMessageId: route.threadMessageId,

@@ -433,7 +433,10 @@ test("持续订阅：自动回合（busy=false）delta 转发；用户回合（b
 		assert.equal(deltas[0]?.key, "k1");
 		// 用户回合（prompt 中 busy=true）→ 持续订阅跳过（由 per-turn onDelta 处理）
 		handle.holdPrompt = true;
-		const p = mgr.prompt("k1", "用户消息", { turnTimeoutMs: 5000, ackAfterMs: 0 });
+		const p = mgr.prompt("k1", "用户消息", {
+			turnTimeoutMs: 5000,
+			ackAfterMs: 0,
+		});
 		await new Promise((r) => setTimeout(r, 20));
 		handle.emitDelta("回合中delta");
 		assert.equal(deltas.length, 1, "busy 时不重复转发");

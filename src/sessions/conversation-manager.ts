@@ -111,7 +111,10 @@ export class ConversationManager {
 	private readonly maxResident: number;
 	private readonly idleDisposeMs: number;
 	private readonly turnSupervisor?: TurnSupervisor;
-	private readonly onSessionDelta?: (key: ConversationKey, delta: string) => void;
+	private readonly onSessionDelta?: (
+		key: ConversationKey,
+		delta: string,
+	) => void;
 	private readonly now: () => number;
 	private readonly entries = new Map<ConversationKey, Entry>();
 	private readonly queues = new Map<ConversationKey, Promise<unknown>>();

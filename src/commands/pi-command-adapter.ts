@@ -29,13 +29,14 @@ export interface PiCommandDeps {
 
 /** pi 内置命令清单（interactive-mode.js 提取，2026-08-08）。 */
 export const PI_COMMANDS: readonly string[] = [
-	"model",
-	"scoped-models",
-	"thinking",
-	"compact",
-	"new",
-	"resume",
-	"name",
+"model",
+"scoped-models",
+"thinking",
+"compact",
+"new",
+"resume",
+"sessions",
+"name",
 	"session",
 	"copy",
 	"help",
@@ -131,6 +132,9 @@ export async function runPiCommand(
 				text: "已创建新会话（pi newSession）。旧会话历史已保留。",
 			};
 		case "resume":
+			return handleResume(deps, input);
+		case "sessions":
+			// 2026-08-08 用户指令：/sessions 列会话（同 /resume，不恢复时只看列表）
 			return handleResume(deps, input);
 		case "name":
 			return handleName(deps, input);

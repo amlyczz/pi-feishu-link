@@ -496,8 +496,13 @@ export class FeishuTransport implements SupervisorTransport {
 				method: "POST",
 				data: { reaction_type: { emoji_type: emojiType } },
 			});
-		} catch {
-			// best-effort reaction
+		} catch (err) {
+			// 2026-08-08：打日志便于排查表情回执缺失（此前静默吞错）。
+			this.deps.logger?.error("feishu.reaction.failed", {
+				messageId,
+				emojiType,
+				error: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}
 
