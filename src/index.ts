@@ -80,6 +80,10 @@ import {
 	statusDetailLines,
 } from "./application/status-formatter.js";
 import {
+	handleCommand as handleCommandImpl,
+	type CommandRouterDeps,
+} from "./application/command-router.js";
+import {
 	notifyOwner as notifyOwnerImpl,
 	notifyConversation as notifyConversationImpl,
 	notifyConversationCard as notifyConversationCardImpl,
@@ -337,123 +341,28 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		);
 	}
 
-	async function handleCommand(
+	// ---- DDD Step 3：命令分发已迁至 application/command-router，闭包薄包装（调用点不变） ----
+	const commandRouterDeps: CommandRouterDeps = {
+		conversations,
+		piBackend,
+		statusStore,
+		conversationKeyFor,
+		replyTo,
+		markDone,
+		exportDiagnostics,
+		handleConversationMessage,
+		detectSchedulerInstalled,
+		buildHelpCard,
+		buildStatusCard,
+		buildSimpleTextCard,
+		formatStatusLine,
+		statusDetailLines,
+	};
+	const handleCommand = (
 		msg: FeishuInboundMessage,
 		cmd: { name: string; rawArgs: string; args: string[] },
 		rawText: string,
-	): Promise<void> {
-		const key = conversationKeyFor(msg);
-		const name = cmd.name;
-		// 1) 桥特有命令（status/workspace/support/doctor/feishu-config/stop/help）
-		if (
-			[
-				"help",
-				"status",
-				"stop",
-				"workspace",
-				"support",
-				"doctor",
-				"feishu-config",
-			].includes(name)
-		) {
-			switch (name) {
-				case "help":
-					await replyTo(msg, buildHelpCard());
-					break;
-				case "status":
-					await replyTo(
-						msg,
-						buildStatusCard(
-							formatStatusLine(statusStore.get()),
-							statusDetailLines(statusStore.get()),
-						),
-					);
-					break;
-				case "stop":
-					await conversations?.disposeActiveFor(key);
-					await replyTo(msg, "已停止当前任务。");
-					break;
-				case "workspace":
-					try {
-						const ws = await conversations?.switchWorkspace(key, cmd.args[0]);
-						await replyTo(msg, `当前工作区：${ws ?? "未切换"}`);
-					} catch (err) {
-						await replyTo(
-							msg,
-							`工作区切换失败：${err instanceof Error ? err.message : String(err)}`,
-						);
-					}
-					break;
-				case "support":
-				case "doctor": {
-					await exportDiagnostics(msg);
-					break;
-				}
-				case "feishu-config":
-					await replyTo(
-						msg,
-						buildSimpleTextCard(
-							"配置：发送 /feishu-config <key>=<value> 热改（如 groupPolicy=mention）。",
-						),
-					);
-					break;
-			}
-			markDone(msg);
-			return;
-		}
-		// 2) pi 内置命令 → CommandAdapter（spec 2026-08-08-1400 §3.3）
-		if (isPiCommand(name)) {
-			const piAdapterDeps: PiCommandDeps = {
-				getHandle: (k) =>
-					conversations?.getHandle(k) ?? Promise.resolve(undefined),
-				listModels: () => conversations?.listModels() ?? Promise.resolve([]),
-				listSessions: () =>
-					conversations?.listSessions("all") ?? Promise.resolve([]),
-				newConversation: (k) =>
-					conversations?.newConversation(k) ?? Promise.resolve(),
-				switchSession: (k, p) =>
-					conversations?.switchSession(k, p) ?? Promise.resolve(),
-				setProviderApiKey: (provider, apiKey) =>
-					piBackend?.setProviderApiKey(provider, apiKey) ??
-					Promise.resolve(false),
-			};
-			const res = await runPiCommand(piAdapterDeps, {
-				key,
-				command: name,
-				args: cmd.args,
-				rawText,
-			});
-			if (res.kind === "handled") {
-				await replyTo(msg, buildSimpleTextCard(res.text));
-				markDone(msg);
-			} else {
-				// 适配器不处理（理论不会发生，防御）→ 原样转发
-				await handleConversationMessage(msg, rawText);
-			}
-			return;
-		}
-		// 3) scheduler（可选依赖，FR-11）
-		if (["loop", "remind", "schedule", "unschedule"].includes(name)) {
-			if (!detectSchedulerInstalled()) {
-				await replyTo(
-					msg,
-					buildSimpleTextCard(
-						"⏰ 定时任务功能需要安装 my-pi-scheduler（可选依赖，不影响其他功能）。\n\n在 pi 终端运行：\n  pi install npm:@ineersa/my-pi-scheduler\n\n重启 pi 后即可使用 /loop、/remind、/schedule 或在聊天里直接说「每天 9 点总结 commit」。",
-					),
-				);
-				return;
-			}
-			await handleConversationMessage(
-				msg,
-				`/${cmd.name} ${cmd.rawArgs}`.trim(),
-			);
-			return;
-		}
-		// 4) 其他（插件命令/skill/模板/未知）→ 原样交 prompt（pi 原生执行，spec §3.2.1）
-		await handleConversationMessage(msg, rawText);
-	}
-
-	// ---------------- inbound pipeline ----------------
+	) => handleCommandImpl(commandRouterDeps, msg, cmd, rawText);
 
 	async function handleInbound(
 		msg: FeishuInboundMessage,
