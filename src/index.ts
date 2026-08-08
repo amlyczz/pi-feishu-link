@@ -84,6 +84,10 @@ import {
 	type CommandRouterDeps,
 } from "./application/command-router.js";
 import {
+	handleInbound as handleInboundImpl,
+	type MessageHandlerDeps,
+} from "./application/message-handler.js";
+import {
 	notifyOwner as notifyOwnerImpl,
 	notifyConversation as notifyConversationImpl,
 	notifyConversationCard as notifyConversationCardImpl,
@@ -269,19 +273,6 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 	 * configured an explicit allowUsers whitelist — in that case ownership is
 	 * declared, not discovered, so an early caller cannot claim admin.
 	 */
-	function recordOwnerIfUnset(userOpenId: string, chatType: string): void {
-		if (chatType !== "p2p") return;
-		const cfg = loadConfig();
-		if (!cfg || cfg.ownerOpenId) return;
-		if (cfg.allowUsers.length > 0) return;
-		cfg.ownerOpenId = userOpenId;
-		try {
-			saveConfig(cfg);
-			logger.info("feishu.owner.recorded", {});
-		} catch {
-			/* best-effort */
-		}
-	}
 
 	async function replyTo(
 		msg: FeishuInboundMessage,
@@ -364,173 +355,35 @@ export default function feishuBridgeExtension(pi: ExtensionAPI) {
 		rawText: string,
 	) => handleCommandImpl(commandRouterDeps, msg, cmd, rawText);
 
-	async function handleInbound(
+
+
+
+	// ---- DDD Step 4：消息编排已迁至 application/message-handler，闭包薄包装（调用点不变） ----
+	const messageHandlerDeps: MessageHandlerDeps = {
+		supervisor,
+		dedupe,
+		statusStore,
+		cfg: loadConfig,
+		saveConfig,
+		get botOpenId() {
+			return botOpenId;
+		},
+		conversations,
+		transport,
+		outbox,
+		router,
+		piBackend,
+		logger,
+		replyTo,
+		conversationKeyFor,
+		handleCommand,
+		handleConversationMessage,
+		buildWelcomeCard,
+	};
+	const handleInbound = (
 		msg: FeishuInboundMessage,
 		opts: { skipDedupe?: boolean } = {},
-	): Promise<void> {
-		supervisor?.recordEvent();
-		// C2: compensation re-injects already-admitted messages — it pre-checks
-		// the dedupe store itself, so it must bypass this re-check or every
-		// backfilled message would be dropped as "already seen".
-		if (!opts.skipDedupe && !dedupe.admit(msg.messageId)) return;
-		if (msg.senderType === "bot") return;
-		// 真实入站计数（2026-08-07）：此前 recordInbound 从未被调用，
-		// inboundCount 恒为 0，诊断误导（"零事件"误判）。
-		statusStore.recordInbound();
-		const cfg = loadConfig();
-		if (!cfg) return;
-		if (cfg.allowUsers.length > 0 && !cfg.allowUsers.includes(msg.senderOpenId))
-			return;
-		if (cfg.allowChats.length > 0 && !cfg.allowChats.includes(msg.chatId))
-			return;
-		// I9: auto-record the first p2p sender as owner (admin by default).
-		recordOwnerIfUnset(msg.senderOpenId, msg.chatType);
-		const key = conversationKeyFor(msg);
-		// M2/§9.1: welcome card on the first message of a brand-new chat.
-		const isNewChat = !router.getRoute(key);
-		if (isNewChat && msg.chatType === "p2p") {
-			const routeRef: RouteRef = {
-				conversationKey: key,
-				chatId: msg.chatId,
-				chatType: msg.chatType,
-				threadMessageId: msg.messageId,
-			};
-			void outbox
-				?.enqueue({
-					dedupeKey: `welcome:${key}`,
-					laneKey: key,
-					route: routeRef,
-					kind: "notify",
-					payload: {
-						type: "card",
-						card: buildWelcomeCard("飞书桥"),
-					},
-				})
-				.catch(() => undefined);
-		}
-
-		if (msg.chatType === "group") {
-			const text = extractPlainTextForTrigger(msg.msgType, msg.content);
-			const decision = shouldAcceptGroupMessage({
-				chatType: "group",
-				groupPolicy: cfg.groupPolicy,
-				mentioned: isMentioned(msg),
-				text,
-				keywords: parseGroupKeywords(cfg.groupKeywords),
-				alsoOnReply: cfg.groupAlsoOnReply,
-				replyToBot: isReplyToBot(msg),
-			});
-			if (!decision.accept) return;
-		}
-
-		if (cfg.forward.reactions.enabled) {
-			// 入站随机表情回执（用户指令 2026-08-07）：随机池排除 DONE，
-			// DONE 只由回合完成时在 handleConversationMessage 打出。
-			void transport?.addReaction(
-				msg.messageId,
-				pickRandomReaction(cfg.forward.reactions.emojis),
-			);
-		}
-
-		router.bindConversation(
-			conversationKeyFor(msg),
-			msg,
-			conversations?.peekSessionId(conversationKeyFor(msg)),
-		);
-
-		const text = extractPlainTextForTrigger(msg.msgType, msg.content).trim();
-		// 2026-08-08（spec §3.2）：交互选择消费——/model /resume 列出选项后，
-		// 用户回复编号/名称即完成选择，不当作普通消息。
-		if (getPendingSelect(key)) {
-			const consumed = tryConsumeSelect(key, text);
-			if (consumed.consumed && consumed.text) {
-				const marker = consumed.text.split(":")[0];
-				const value = consumed.text.slice(consumed.text.indexOf(":") + 1);
-				if (marker === "__MODEL_SELECT__") {
-					const handle = await conversations?.getHandle(key);
-					if (handle) {
-						const ok = await handle.setModel(value);
-						await replyTo(
-							msg,
-							ok
-								? `✅ 模型已切换：${value}`
-								: `❌ 模型 ${value} 不可用（/model 查看列表）`,
-						);
-					}
-				} else if (marker === "__SESSION_SELECT__") {
-					await conversations?.switchSession(key, value);
-					await replyTo(msg, `✅ 已恢复会话：${value}`);
-				} else if (marker === "__API_KEY__") {
-					// 格式 __API_KEY__:<provider>:<key>
-					const colon = value.indexOf(":");
-					if (colon > 0) {
-						const provider = value.slice(0, colon);
-						const apiKey = value.slice(colon + 1);
-						const ok = await piBackend?.setProviderApiKey(provider, apiKey);
-						await replyTo(
-							msg,
-							ok
-								? `✅ ${provider} API key 已保存。发送 /model 查看可用模型。`
-								: `❌ ${provider} API key 保存失败。`,
-						);
-					}
-				}
-				return;
-			}
-		}
-		if (text.startsWith("/")) {
-			const cmd = parseCommand(text);
-			if (cmd) {
-				await handleCommand(msg, cmd, text);
-				return;
-			}
-		}
-		// M4 multimedia inbound: voice → unsupported hint; attachments → pipeline.
-		if (isVoiceMessage(msg)) {
-			await replyTo(msg, "暂不支持语音消息，请发文字或图片。");
-			return;
-		}
-		const attachments = await processAttachments(
-			msg,
-			{
-				download: (mid, key, type) => {
-					if (!transport) throw new Error("transport not started");
-					return transport.downloadResource(mid, key, type);
-				},
-			},
-			{
-				maxAttachments: cfg.media.maxAttachments,
-				maxTotalBytes: cfg.media.maxTotalBytes,
-				maxImageBytes: Math.min(cfg.media.maxTotalBytes, 10 * 1024 * 1024),
-				maxTxtBytes: 2 * 1024 * 1024,
-				maxExtractedChars: 150_000,
-			},
-		);
-		for (const reason of attachments.unsupported) {
-			await replyTo(msg, `附件处理提示：${reason}`);
-		}
-		const promptText =
-			[text, attachments.text].filter(Boolean).join("\n\n").trim() ||
-			"(附件消息)";
-		await handleConversationMessage(msg, promptText, attachments.images);
-	}
-
-	function isMentioned(msg: FeishuInboundMessage): boolean {
-		if (!botOpenId) return true;
-		return Boolean(
-			msg.mentions?.some(
-				(m) => m?.id?.open_id === botOpenId || m?.id?.union_id === botOpenId,
-			),
-		);
-	}
-
-	function isReplyToBot(msg: FeishuInboundMessage): boolean {
-		const parent = msg.parentId;
-		if (!parent) return false;
-		// best-effort: the transport tracks bot outbound ids; approximate by
-		// checking the route's last bot message.
-		return router.getRoute(conversationKeyFor(msg))?.lastMessageId === parent;
-	}
+	) => handleInboundImpl(messageHandlerDeps, msg, opts);
 
 	async function handleConversationMessage(
 		msg: FeishuInboundMessage,
